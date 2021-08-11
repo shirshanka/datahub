@@ -12,10 +12,16 @@ This plugin extracts the following:
 
 - Looker dashboards and dashboard elements (charts)
 - Names, descriptions, URLs, chart types, input view for the charts
+- Owners of dashboards
+
+**_NOTE:_** To get complete Looker metadata integration (including Looker views and lineage to the underlying warehouse tables), you must ALSO use the LookML source. Documentation for that is [here](./lookml.md)
+
+## Configuration Notes
 
 See the [Looker authentication docs](https://docs.looker.com/reference/api-and-integration/api-auth#authentication_with_an_sdk) for the steps to create a client ID and secret.
 
 ## Quickstart recipe
+
 
 Check out the following recipe to get started with ingestion! See [below](#config-details) for full configuration options.
 
@@ -32,6 +38,7 @@ source:
     client_id: admin
     client_secret: password
 
+
 sink:
   # sink configs
 ```
@@ -46,7 +53,9 @@ Note that a `.` is used to denote nested fields in the YAML recipe.
 | `client_secret`           | ✅       |                         | Looker API3 client secret.                                                                                   |
 | `base_url`                | ✅       |                         | Url to your Looker instance: `https://company.looker.com:19999` or `https://looker.company.com`, or similar. |
 | `platform_name`           |          | `"looker"`              | Platform to use in namespace when constructing URNs.                                                         |
-| `actor`                   |          | `"urn:li:corpuser:etl"` | Actor to use in ownership properties of ingested metadata.                                                   |
+| `extract_owners`                     |          | `True`                | When enabled, extracts ownership from Looker directly. When disabled, ownership is left empty for dashboards.                                                      |
+| `strip_user_ids_from_email`                     |          | `True`                | When enabled, converts Looker user emails of the form name@domain.com to urn:li:corpuser:name when assigning ownership                                                    |
+| `actor`                |      ⛔️ Deprecated     | `"urn:li:corpuser:etl"` | This config is deprecated in favor of `extract_owners`. Previously, was the actor to use in ownership properties of ingested metadata              |
 | `dashboard_pattern.allow` |          |                         | List of regex patterns for dashboards to include in ingestion.                                                        |
 | `dashboard_pattern.deny`  |          |                         | List of regex patterns for dashboards to exclude from ingestion.                                                      |
 | `dashboard_pattern.ignoreCase`  |          | `True` | Whether to ignore case sensitivity during pattern matching.                                                                                                                                  |
@@ -55,6 +64,7 @@ Note that a `.` is used to denote nested fields in the YAML recipe.
 | `chart_pattern.ignoreCase`  |          | `True` | Whether to ignore case sensitivity during pattern matching.                                                                                                                                  |
 | `include_deleted`         |          | `False`                 | Whether to include deleted dashboards.                                                                       |
 | `env`                     |          | `"PROD"`                | Environment to use in namespace when constructing URNs.                                                      |
+
 
 ## Compatibility
 
