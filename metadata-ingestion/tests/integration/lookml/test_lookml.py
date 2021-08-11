@@ -24,7 +24,13 @@ def test_lookml_ingest(pytestconfig, tmp_path, mock_time):
                 "type": "lookml",
                 "config": {
                     "base_folder": str(test_resources_dir / "lkml_samples"),
-                    "connection_to_platform_map": {"my_connection": "conn"},
+                    "connection_to_platform_map": {
+                        "my_connection": {
+                            "platform": "snowflake",
+                            "default_db": "default_db",
+                            "default_schema": "default_schema",
+                        }
+                    },
                     "parse_table_names_from_sql": True,
                 },
             },
