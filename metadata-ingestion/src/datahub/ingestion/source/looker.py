@@ -8,16 +8,19 @@ from typing import Any, Iterable, List, MutableMapping, Optional, Sequence
 
 import looker_sdk
 from looker_sdk.error import SDKError
+from looker_sdk.sdk.api31.methods import Looker31SDK
 from looker_sdk.sdk.api31.models import (
     Dashboard,
     DashboardElement,
+    FolderBase,
     LookWithQuery,
     Query,
+    User,
 )
 
 import datahub.emitter.mce_builder as builder
 from datahub.configuration import ConfigModel
-from datahub.configuration.common import AllowDenyPattern
+from datahub.configuration.common import AllowDenyPattern, ConfigurationError
 from datahub.ingestion.api.common import PipelineContext
 from datahub.ingestion.api.source import Source, SourceReport
 from datahub.ingestion.api.workunit import MetadataWorkUnit
@@ -28,24 +31,55 @@ from datahub.metadata.com.linkedin.pegasus2avro.metadata.snapshot import (
 )
 from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
 from datahub.metadata.schema_classes import (
+    BrowsePathsClass,
     ChartInfoClass,
     ChartTypeClass,
     DashboardInfoClass,
+    OwnerClass,
+    OwnershipClass,
+    OwnershipTypeClass,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class LookerDashboardSourceConfig(ConfigModel):
+class LookerAPIConfig(ConfigModel):
     client_id: str
     client_secret: str
     base_url: str
+
+
+class LookerAPI:
+    """A holder class for a Looker client"""
+
+    def __init__(self, config: LookerAPIConfig) -> None:
+        # The Looker SDK looks wants these as environment variables
+        os.environ["LOOKERSDK_CLIENT_ID"] = config.client_id
+        os.environ["LOOKERSDK_CLIENT_SECRET"] = config.client_secret
+        os.environ["LOOKERSDK_BASE_URL"] = config.base_url
+
+        self.client = looker_sdk.init31()
+        # try authenticating current user to check connectivity
+        # (since it's possible to initialize an invalid client without any complaints)
+        try:
+            self.client.me()
+        except SDKError as e:
+            raise ConfigurationError(
+                "Failed to initialize Looker client. Please check your configuration."
+            ) from e
+
+    def get_client(self) -> Looker31SDK:
+        return self.client
+
+
+class LookerDashboardSourceConfig(LookerAPIConfig):
     platform_name: str = "looker"
-    actor: str = "urn:li:corpuser:etl"
+    actor: Optional[str]
     dashboard_pattern: AllowDenyPattern = AllowDenyPattern.allow_all()
     chart_pattern: AllowDenyPattern = AllowDenyPattern.allow_all()
     include_deleted: bool = False
     env: str = builder.DEFAULT_ENV
+    strip_user_ids_from_email: bool = True
 
 
 @dataclass
@@ -102,8 +136,11 @@ class LookerDashboard:
     dashboard_elements: List[LookerDashboardElement]
     created_at: Optional[datetime.datetime]
     description: Optional[str] = None
+    folder_path: Optional[str] = None
     is_deleted: bool = False
     is_hidden: bool = False
+    owner: Optional[str] = None
+    strip_user_ids_from_email: Optional[bool] = True
 
     def url(self, base_url):
         return base_url + "/dashboards/" + self.id
@@ -292,7 +329,7 @@ class LookerDashboardSource(Source):
         return chart_type
 
     def _make_chart_mce(
-        self, dashboard_element: LookerDashboardElement
+        self, dashboard_element: LookerDashboardElement, dashboard: LookerDashboard
     ) -> MetadataChangeEvent:
         chart_urn = builder.make_chart_urn(
             self.source_config.platform_name, dashboard_element.get_urn_element_id()
@@ -323,7 +360,7 @@ class LookerDashboardSource(Source):
     ) -> List[MetadataChangeEvent]:
 
         chart_mces = [
-            self._make_chart_mce(element)
+            self._make_chart_mce(element, looker_dashboard)
             for element in looker_dashboard.dashboard_elements
         ]
 
@@ -344,13 +381,45 @@ class LookerDashboardSource(Source):
         )
 
         dashboard_snapshot.aspects.append(dashboard_info)
+        if looker_dashboard.folder_path is not None:
+            browse_path = BrowsePathsClass(
+                paths=[f"/looker/{looker_dashboard.folder_path}/{looker_dashboard.id}"]
+            )
+            dashboard_snapshot.aspects.append(browse_path)
+
+        if looker_dashboard.owner is not None:
+            ownership: OwnershipClass = OwnershipClass(
+                owners=[
+                    OwnerClass(
+                        owner=looker_dashboard.owner, type=OwnershipTypeClass.DATAOWNER
+                    )
+                ]
+            )
+            dashboard_snapshot.aspects.append(ownership)
+
         dashboard_snapshot.aspects.append(Status(removed=looker_dashboard.is_deleted))
 
         dashboard_mce = MetadataChangeEvent(proposedSnapshot=dashboard_snapshot)
 
         return chart_mces + [dashboard_mce]
 
-    def _get_looker_dashboard(self, dashboard: Dashboard) -> LookerDashboard:
+    def _generate_user_urn_from_email(self, email: str) -> str:
+        if self.source_config.strip_user_ids_from_email:
+            return builder.make_user_urn(email.split("@")[0])
+        else:
+            return builder.make_user_urn(email)
+
+    def _get_folder_path(self, folder: FolderBase, client: Looker31SDK) -> str:
+        assert folder.id is not None
+        ancestors = [
+            ancestor.name
+            for ancestor in client.folder_ancestors(folder.id, fields="name")
+        ]
+        return "/".join(ancestors + [folder.name])
+
+    def _get_looker_dashboard(
+        self, dashboard: Dashboard, client: Looker31SDK
+    ) -> LookerDashboard:
         dashboard_elements: List[LookerDashboardElement] = []
         elements = (
             dashboard.dashboard_elements
@@ -371,6 +440,22 @@ class LookerDashboardSource(Source):
         if dashboard.id is None or dashboard.title is None:
             raise ValueError("Both dashboard ID and title are None")
 
+        dashboard_owner = None
+        if dashboard.folder is None:
+            logger.debug(f"{dashboard.id} has no folder")
+        if dashboard.folder is not None:
+            dashboard_folder_path = self._get_folder_path(dashboard.folder, client)
+            user_id = dashboard.folder.creator_id
+            if user_id is not None:
+                user: User = client.user(user_id=user_id)
+                email = user.email
+                if email is not None:
+                    dashboard_owner = self._generate_user_urn_from_email(email)
+            else:
+                logger.debug(
+                    f"Dashboard: {dashboard.id} with folder: {dashboard.folder.name} has no creator"
+                )
+
         looker_dashboard = LookerDashboard(
             id=dashboard.id,
             title=dashboard.title,
@@ -379,25 +464,14 @@ class LookerDashboardSource(Source):
             created_at=dashboard.created_at,
             is_deleted=dashboard.deleted if dashboard.deleted is not None else False,
             is_hidden=dashboard.deleted if dashboard.deleted is not None else False,
+            folder_path=dashboard_folder_path,
+            owner=dashboard_owner,
+            strip_user_ids_from_email=self.source_config.strip_user_ids_from_email,
         )
         return looker_dashboard
 
-    def _get_looker_client(self):
-        # The Looker SDK looks wants these as environment variables
-        os.environ["LOOKERSDK_CLIENT_ID"] = self.source_config.client_id
-        os.environ["LOOKERSDK_CLIENT_SECRET"] = self.source_config.client_secret
-        os.environ["LOOKERSDK_BASE_URL"] = self.source_config.base_url
-
-        client = looker_sdk.init31()
-
-        # try authenticating current user to check connectivity
-        # (since it's possible to initialize an invalid client without any complaints)
-        client.me()
-
-        return client
-
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
-        client = self._get_looker_client()
+        client = LookerAPI(self.source_config).get_client()
         dashboards = client.all_dashboards(fields="id")
         deleted_dashboards = (
             client.search_dashboards(fields="id", deleted="true")
@@ -422,6 +496,8 @@ class LookerDashboardSource(Source):
                     "dashboard_elements",
                     "dashboard_filters",
                     "deleted",
+                    "description",
+                    "folder",
                 ]
                 dashboard_object = client.dashboard(
                     dashboard_id=dashboard_id, fields=",".join(fields)
@@ -434,7 +510,7 @@ class LookerDashboardSource(Source):
                 )
                 continue
 
-            looker_dashboard = self._get_looker_dashboard(dashboard_object)
+            looker_dashboard = self._get_looker_dashboard(dashboard_object, client)
             mces = self._make_dashboard_and_chart_mces(looker_dashboard)
             for mce in mces:
                 workunit = MetadataWorkUnit(
