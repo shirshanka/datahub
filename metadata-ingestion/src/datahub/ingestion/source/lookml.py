@@ -61,8 +61,15 @@ from datahub.metadata.com.linkedin.pegasus2avro.schema import (
 from datahub.metadata.schema_classes import (
     DatasetPropertiesClass,
     EnumTypeClass,
+    GlobalTagsClass,
     MetadataChangeEventClass,
+    OwnerClass,
+    OwnershipClass,
+    OwnershipTypeClass,
     SchemaMetadataClass,
+    TagAssociationClass,
+    TagPropertiesClass,
+    TagSnapshotClass,
 )
 
 assert sys.version_info[1] >= 7  # needed for mypy
@@ -70,7 +77,9 @@ assert sys.version_info[1] >= 7  # needed for mypy
 logger = logging.getLogger(__name__)
 
 
-def _get_bigquery_definition(looker_connection: DBConnection) -> Tuple[str, Optional[str], Optional[str]]:
+def _get_bigquery_definition(
+    looker_connection: DBConnection,
+) -> Tuple[str, Optional[str], Optional[str]]:
     platform = "bigquery"
     # bigquery project ids are returned in the host field
     db = looker_connection.host
@@ -78,7 +87,9 @@ def _get_bigquery_definition(looker_connection: DBConnection) -> Tuple[str, Opti
     return (platform, db, schema)
 
 
-def _get_hive_definition(looker_connection: DBConnection) -> Tuple[str, Optional[str], Optional[str]]:
+def _get_hive_definition(
+    looker_connection: DBConnection,
+) -> Tuple[str, Optional[str], Optional[str]]:
     # Hive is a two part system (db.table)
     platform = "hive"
     db = looker_connection.database
@@ -86,7 +97,9 @@ def _get_hive_definition(looker_connection: DBConnection) -> Tuple[str, Optional
     return (platform, db, schema)
 
 
-def _get_generic_definition(looker_connection: DBConnection) -> Tuple[str, Optional[str], Optional[str]]:
+def _get_generic_definition(
+    looker_connection: DBConnection,
+) -> Tuple[str, Optional[str], Optional[str]]:
     dialect_name = looker_connection.dialect_name
     assert dialect_name is not None
     # generally the first part of the dialect name before _ is the name of the platform
@@ -136,6 +149,7 @@ class LookMLSourceConfig(ConfigModel):
     env: str = builder.DEFAULT_ENV
     parse_table_names_from_sql: bool = False
     sql_parser: str = "datahub.utilities.sql_parser.DefaultSQLParser"
+    tag_measures_and_dimensions: bool = True
     api: Optional[LookerAPIConfig]
 
     @validator("connection_to_platform_map", pre=True)
@@ -836,6 +850,23 @@ class LookMLSource(Source):
         data_type = SchemaFieldDataType(type=type_class())
         return data_type
 
+    def _get_tags_from_field_type(
+        self, field_type: ViewFieldType
+    ) -> Optional[GlobalTagsClass]:
+        if field_type in self.type_to_tag_map:
+            return GlobalTagsClass(
+                tags=[
+                    TagAssociationClass(tag=tag_name)
+                    for tag_name in self.type_to_tag_map[field_type]
+                ]
+            )
+        else:
+            self.reporter.report_warning(
+                "lookml",
+                "Failed to map view field type {field_type}. Won't emit tags for it",
+            )
+            return None
+
     def _get_fields_and_primary_keys(
         self, looker_view: LookerView
     ) -> Tuple[List[SchemaField], List[str]]:
@@ -846,7 +877,12 @@ class LookMLSource(Source):
                 fieldPath=field.name,
                 type=self._get_field_type(field.type),
                 nativeDataType=field.type,
-                description=f"{field.field_type.value}. {field.description}",
+                description=f"{field.description}"
+                if self.source_config.tag_measures_and_dimensions
+                else f"{field.field_type.value}. {field.description}",
+                globalTags=self._get_tags_from_field_type(field.field_type)
+                if self.source_config.tag_measures_and_dimensions
+                else None,
             )
             fields.append(schema_field)
             if field.is_primary_key:
@@ -951,6 +987,43 @@ class LookMLSource(Source):
             self.reporter.report_explores_dropped(explore.name)
             return None
 
+    type_to_tag_map: Dict[ViewFieldType, List[str]] = {
+        ViewFieldType.DIMENSION: ["urn:li:tag:dimension"],
+        ViewFieldType.DIMENSION_GROUP: ["urn:li:tag:dimension", "urn:li:tag:temporal"],
+        ViewFieldType.MEASURE: ["urn:li:tag:measure"],
+    }
+
+    tag_definitions: Dict[str, TagPropertiesClass] = {
+        "urn:li:tag:dimension": TagPropertiesClass(
+            name="Dimension",
+            description="A tag that is applied to all dimension fields.",
+        ),
+        "urn:li:tag:temporal": TagPropertiesClass(
+            name="Temporal",
+            description="A tag that is applied to all time-based (temporal) fields such as timestamps or durations.",
+        ),
+        "urn:li:tag:measure": TagPropertiesClass(
+            name="Measure",
+            description="A tag that is applied to all measures (metrics). Measures are typically the columns that you aggregate on",
+        ),
+    }
+
+    def _get_tag_mce_for_urn(self, tag_urn: str) -> MetadataChangeEvent:
+        assert tag_urn in self.tag_definitions
+        ownership = OwnershipClass(
+            owners=[
+                OwnerClass(
+                    owner="urn:li:corpuser:datahub",
+                    type=OwnershipTypeClass.DATAOWNER,
+                )
+            ]
+        )
+        return MetadataChangeEvent(
+            proposedSnapshot=TagSnapshotClass(
+                urn=tag_urn, aspects=[ownership, self.tag_definitions[tag_urn]]
+            )
+        )
+
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:  # noqa: C901
         viewfile_loader = LookerViewFileLoader(
             str(self.source_config.base_folder), self.reporter
@@ -1024,7 +1097,8 @@ class LookMLSource(Source):
                             ):
                                 mce = self._build_dataset_mce(maybe_looker_view)
                                 workunit = MetadataWorkUnit(
-                                    id=f"lookml-{maybe_looker_view.view_name}", mce=mce
+                                    id=f"lookml-view-{maybe_looker_view.view_name}",
+                                    mce=mce,
                                 )
                                 self.reporter.report_workunit(workunit)
                                 processed_view_files.add(include)
@@ -1051,7 +1125,16 @@ class LookMLSource(Source):
             )
             if explore_mce is not None:
                 workunit = MetadataWorkUnit(
-                    id=f"lookml-{maybe_looker_explore.name}", mce=explore_mce
+                    id=f"lookml-explore-{maybe_looker_explore.name}", mce=explore_mce
+                )
+                self.reporter.report_workunit(workunit)
+                yield workunit
+
+        if self.source_config.tag_measures_and_dimensions:
+            # Emit tag MCEs for measures and dimensions:
+            for tag_urn in self.tag_definitions:
+                workunit = MetadataWorkUnit(
+                    id=f"tag-{tag_urn}", mce=self._get_tag_mce_for_urn(tag_urn)
                 )
                 self.reporter.report_workunit(workunit)
                 yield workunit
