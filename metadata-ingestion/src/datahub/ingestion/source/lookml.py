@@ -988,21 +988,24 @@ class LookMLSource(Source):
             return None
 
     type_to_tag_map: Dict[ViewFieldType, List[str]] = {
-        ViewFieldType.DIMENSION: ["urn:li:tag:dimension"],
-        ViewFieldType.DIMENSION_GROUP: ["urn:li:tag:dimension", "urn:li:tag:temporal"],
-        ViewFieldType.MEASURE: ["urn:li:tag:measure"],
+        ViewFieldType.DIMENSION: ["urn:li:tag:datahub.dimension"],
+        ViewFieldType.DIMENSION_GROUP: [
+            "urn:li:tag:datahub.dimension",
+            "urn:li:tag:datahub.temporal",
+        ],
+        ViewFieldType.MEASURE: ["urn:li:tag:datahub.measure"],
     }
 
     tag_definitions: Dict[str, TagPropertiesClass] = {
-        "urn:li:tag:dimension": TagPropertiesClass(
+        "urn:li:tag:datahub.dimension": TagPropertiesClass(
             name="Dimension",
             description="A tag that is applied to all dimension fields.",
         ),
-        "urn:li:tag:temporal": TagPropertiesClass(
+        "urn:li:tag:datahub.temporal": TagPropertiesClass(
             name="Temporal",
             description="A tag that is applied to all time-based (temporal) fields such as timestamps or durations.",
         ),
-        "urn:li:tag:measure": TagPropertiesClass(
+        "urn:li:tag:datahub.measure": TagPropertiesClass(
             name="Measure",
             description="A tag that is applied to all measures (metrics). Measures are typically the columns that you aggregate on",
         ),
