@@ -5,16 +5,20 @@ import pytest
 from freezegun import freeze_time
 
 from datahub.ingestion.run.pipeline import Pipeline
+from datahub.ingestion.source.looker import LookerAPI
 from tests.test_helpers import mce_helpers
 
 logging.getLogger("lkml").setLevel(logging.INFO)
+
+import time
+from unittest import mock
 
 FROZEN_TIME = "2020-04-14 07:00:00"
 
 
 @freeze_time(FROZEN_TIME)
 @pytest.mark.skipif(sys.version_info < (3, 7), reason="lkml requires Python 3.7+")
-def test_lookml_ingest(pytestconfig, tmp_path, mock_time):
+def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
     test_resources_dir = pytestconfig.rootpath / "tests/integration/lookml"
 
     pipeline = Pipeline.create(
@@ -37,7 +41,7 @@ def test_lookml_ingest(pytestconfig, tmp_path, mock_time):
             "sink": {
                 "type": "file",
                 "config": {
-                    "filename": f"{tmp_path}/lookml_mces.json",
+                    "filename": f"{tmp_path}/lookml_mces_offline.json",
                 },
             },
         }
@@ -48,6 +52,86 @@ def test_lookml_ingest(pytestconfig, tmp_path, mock_time):
 
     mce_helpers.check_golden_file(
         pytestconfig,
-        output_path=tmp_path / "lookml_mces.json",
+        output_path=tmp_path / "lookml_mces_offline.json",
         golden_path=test_resources_dir / "expected_output.json",
     )
+
+
+from datetime import datetime
+
+from looker_sdk.sdk.api31.models import (
+    Dashboard,
+    DashboardElement,
+    DBConnection,
+    Dialect,
+    Query,
+)
+
+
+@freeze_time(FROZEN_TIME)
+@pytest.mark.skipif(sys.version_info < (3, 7), reason="lkml requires Python 3.7+")
+def test_lookml_ingest_api(pytestconfig, tmp_path, mock_time):
+    # test with BigQuery connection
+    ingestion_test(
+        pytestconfig,
+        tmp_path,
+        mock_time,
+        DBConnection(
+            dialect_name="bigquery", host="project-foo", database="default-db"
+        ),
+    )
+    # test with Hive connection
+    ingestion_test(
+        pytestconfig,
+        tmp_path,
+        mock_time,
+        DBConnection(
+            dialect_name="hive2",
+            database="default-hive-db",
+        ),
+    )
+
+
+def ingestion_test(
+    pytestconfig, tmp_path, mock_time, mock_connection: DBConnection
+) -> None:
+    test_resources_dir = pytestconfig.rootpath / "tests/integration/lookml"
+    mce_out_file = f"lookml_mces_api_{mock_connection.dialect_name}.json"
+    mocked_client = mock.MagicMock()
+    with mock.patch("looker_sdk.init31") as mock_sdk:
+        mock_sdk.return_value = mocked_client
+        # mock_connection = mock.MagicMock()
+        mocked_client.connection.return_value = mock_connection
+
+        pipeline = Pipeline.create(
+            {
+                "run_id": "lookml-test",
+                "source": {
+                    "type": "lookml",
+                    "config": {
+                        "base_folder": str(test_resources_dir / "lkml_samples"),
+                        "api": {
+                            "client_id": "fake_client_id",
+                            "client_secret": "fake_secret",
+                            "base_url": "fake_account.looker.com",
+                        },
+                        "parse_table_names_from_sql": True,
+                    },
+                },
+                "sink": {
+                    "type": "file",
+                    "config": {
+                        "filename": f"{tmp_path}/{mce_out_file}",
+                    },
+                },
+            }
+        )
+        pipeline.run()
+        pipeline.pretty_print_summary()
+        pipeline.raise_from_status(raise_warnings=True)
+
+        mce_helpers.check_golden_file(
+            pytestconfig,
+            output_path=tmp_path / mce_out_file,
+            golden_path=test_resources_dir / mce_out_file,
+        )

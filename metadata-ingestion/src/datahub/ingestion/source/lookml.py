@@ -87,46 +87,44 @@ def _get_bigquery_definition(
     return (platform, db, schema)
 
 
-def _get_hive_definition(
-    looker_connection: DBConnection,
-) -> Tuple[str, Optional[str], Optional[str]]:
-    # Hive is a two part system (db.table)
-    platform = "hive"
-    db = looker_connection.database
-    schema = None
-    return (platform, db, schema)
-
-
 def _get_generic_definition(
-    looker_connection: DBConnection,
+    looker_connection: DBConnection, platform: Optional[str] = None
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    dialect_name = looker_connection.dialect_name
-    assert dialect_name is not None
-    # generally the first part of the dialect name before _ is the name of the platform
-    platform = dialect_name.split("_")[0]
+    if platform is None:
+        # We extract the platform from the dialect name
+        dialect_name = looker_connection.dialect_name
+        assert dialect_name is not None
+        # generally the first part of the dialect name before _ is the name of the platform
+        # versions are encoded as numbers and can be removed
+        # e.g. spark1 or hive2 or druid_18
+        platform = re.sub(r"[0-9]+", "", dialect_name.split("_")[0])
+
+    assert (
+        platform is not None
+    ), f"Failed to extract a valid platform from connection {looker_connection}"
     db = looker_connection.database
-    schema = looker_connection.schema
+    schema = looker_connection.schema  # ok for this to be None
     return (platform, db, schema)
 
 
 class LookerConnectionDefinition(ConfigModel):
     platform: str
     default_db: str
-    default_schema: str
+    default_schema: Optional[str]  # Optional since some sources are two-level only
 
     @validator("*")
     def lower_everything(cls, v):
         """We lower case all strings passed in to avoid casing issues later"""
-        return v.lower()
+        if v is not None:
+            return v.lower()
 
     @classmethod
     def from_looker_connection(
         cls, looker_connection: DBConnection
     ) -> "LookerConnectionDefinition":
-
+        """Dialect definitions are here: https://docs.looker.com/setup-and-management/database-config"""
         extractors: Dict[str, Any] = {
-            "bigquery": _get_bigquery_definition,
-            "hive": _get_hive_definition,
+            "^bigquery": _get_bigquery_definition,
             ".*": _get_generic_definition,
         }
 
@@ -726,6 +724,12 @@ class LookMLSource(Source):
             )
         return looker_model
 
+    def _platform_names_have_2_parts(self, platform: str) -> bool:
+        if platform in ["hive", "mysql"]:
+            return True
+        else:
+            return False
+
     def _generate_fully_qualified_name(
         self, sql_table_name: str, connection_def: LookerConnectionDefinition
     ) -> str:
@@ -746,12 +750,15 @@ class LookMLSource(Source):
 
         if parts == 1:
             # Bare table form
-            dataset_name = f"{connection_def.default_db}.{connection_def.default_schema}.{sql_table_name}"
+            if self._platform_names_have_2_parts(connection_def.platform):
+                dataset_name = f"{connection_def.default_db}.{sql_table_name}"
+            else:
+                dataset_name = f"{connection_def.default_db}.{connection_def.default_schema}.{sql_table_name}"
             return dataset_name
 
         if parts == 2:
             # if this is a 2 part platform, we are fine
-            if connection_def.platform == "mysql" or connection_def.platform == "hive":
+            if self._platform_names_have_2_parts(connection_def.platform):
                 return sql_table_name
             # otherwise we attach the default top-level container
             dataset_name = f"{connection_def.default_db}.{sql_table_name}"

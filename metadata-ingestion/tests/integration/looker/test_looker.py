@@ -14,12 +14,10 @@ FROZEN_TIME = "2020-04-14 07:00:00"
 @freeze_time(FROZEN_TIME)
 def test_looker_ingest(pytestconfig, tmp_path, mock_time):
     mocked_client = mock.MagicMock()
-    with mock.patch(
-        "datahub.ingestion.source.looker.LookerDashboardSource._get_looker_client",
-        mocked_client,
-    ):
-        mocked_client.return_value.all_dashboards.return_value = [Dashboard(id="1")]
-        mocked_client.return_value.dashboard.return_value = Dashboard(
+    with mock.patch("looker_sdk.init31") as mock_sdk:
+        mock_sdk.return_value = mocked_client
+        mocked_client.all_dashboards.return_value = [Dashboard(id="1")]
+        mocked_client.dashboard.return_value = Dashboard(
             id="1",
             title="foo",
             created_at=datetime.utcfromtimestamp(time.time()),
@@ -61,23 +59,22 @@ def test_looker_ingest(pytestconfig, tmp_path, mock_time):
         )
         pipeline.run()
         pipeline.raise_from_status()
+        mce_out_file = "golden_test_ingest.json"
 
         mce_helpers.check_golden_file(
             pytestconfig,
             output_path=tmp_path / "looker_mces.json",
-            golden_path=test_resources_dir / "expected_output.json",
+            golden_path=f"{test_resources_dir}/{mce_out_file}",
         )
 
 
 @freeze_time(FROZEN_TIME)
 def test_looker_ingest_allow_pattern(pytestconfig, tmp_path, mock_time):
     mocked_client = mock.MagicMock()
-    with mock.patch(
-        "datahub.ingestion.source.looker.LookerDashboardSource._get_looker_client",
-        mocked_client,
-    ):
-        mocked_client.return_value.all_dashboards.return_value = [Dashboard(id="1")]
-        mocked_client.return_value.dashboard.return_value = Dashboard(
+    with mock.patch("looker_sdk.init31") as mock_sdk:
+        mock_sdk.return_value = mocked_client
+        mocked_client.all_dashboards.return_value = [Dashboard(id="1")]
+        mocked_client.dashboard.return_value = Dashboard(
             id="1",
             title="foo",
             created_at=datetime.utcfromtimestamp(time.time()),
@@ -130,9 +127,10 @@ def test_looker_ingest_allow_pattern(pytestconfig, tmp_path, mock_time):
         )
         pipeline.run()
         pipeline.raise_from_status()
+        mce_out_file = "golden_test_allow_ingest.json"
 
         mce_helpers.check_golden_file(
             pytestconfig,
             output_path=tmp_path / "looker_mces.json",
-            golden_path=test_resources_dir / "expected_output.json",
+            golden_path=f"{test_resources_dir}/{mce_out_file}",
         )

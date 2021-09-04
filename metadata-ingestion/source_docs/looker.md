@@ -32,6 +32,7 @@ source:
     client_id: admin
     client_secret: password
 
+
 sink:
   # sink configs
 ```

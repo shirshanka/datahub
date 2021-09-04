@@ -79,6 +79,7 @@ class LookerDashboardSourceConfig(LookerAPIConfig):
     chart_pattern: AllowDenyPattern = AllowDenyPattern.allow_all()
     include_deleted: bool = False
     env: str = builder.DEFAULT_ENV
+    extract_owners: bool = True
     strip_user_ids_from_email: bool = True
 
 
@@ -358,7 +359,6 @@ class LookerDashboardSource(Source):
     def _make_dashboard_and_chart_mces(
         self, looker_dashboard: LookerDashboard
     ) -> List[MetadataChangeEvent]:
-
         chart_mces = [
             self._make_chart_mce(element, looker_dashboard)
             for element in looker_dashboard.dashboard_elements
@@ -443,18 +443,20 @@ class LookerDashboardSource(Source):
         dashboard_owner = None
         if dashboard.folder is None:
             logger.debug(f"{dashboard.id} has no folder")
+        dashboard_folder_path = None
         if dashboard.folder is not None:
             dashboard_folder_path = self._get_folder_path(dashboard.folder, client)
-            user_id = dashboard.folder.creator_id
-            if user_id is not None:
-                user: User = client.user(user_id=user_id)
-                email = user.email
-                if email is not None:
-                    dashboard_owner = self._generate_user_urn_from_email(email)
-            else:
-                logger.debug(
-                    f"Dashboard: {dashboard.id} with folder: {dashboard.folder.name} has no creator"
-                )
+            if self.source_config.extract_owners:
+                user_id = dashboard.folder.creator_id
+                if user_id is not None:
+                    user: User = client.user(user_id=user_id)
+                    email = user.email
+                    if email is not None:
+                        dashboard_owner = self._generate_user_urn_from_email(email)
+                else:
+                    logger.debug(
+                        f"Dashboard: {dashboard.id} with folder: {dashboard.folder.name} has no creator"
+                    )
 
         looker_dashboard = LookerDashboard(
             id=dashboard.id,
