@@ -1,17 +1,18 @@
 import logging
+import pathlib
 import sys
+from typing import Any
+from unittest import mock
 
 import pytest
 from freezegun import freeze_time
+from looker_sdk.sdk.api31.models import DBConnection
 
 from datahub.ingestion.run.pipeline import Pipeline
-from datahub.ingestion.source.looker import LookerAPI
 from tests.test_helpers import mce_helpers
 
 logging.getLogger("lkml").setLevel(logging.INFO)
 
-import time
-from unittest import mock
 
 FROZEN_TIME = "2020-04-14 07:00:00"
 
@@ -57,17 +58,6 @@ def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
     )
 
 
-from datetime import datetime
-
-from looker_sdk.sdk.api31.models import (
-    Dashboard,
-    DashboardElement,
-    DBConnection,
-    Dialect,
-    Query,
-)
-
-
 @freeze_time(FROZEN_TIME)
 @pytest.mark.skipif(sys.version_info < (3, 7), reason="lkml requires Python 3.7+")
 def test_lookml_ingest_api(pytestconfig, tmp_path, mock_time):
@@ -93,8 +83,11 @@ def test_lookml_ingest_api(pytestconfig, tmp_path, mock_time):
 
 
 def ingestion_test(
-    pytestconfig, tmp_path, mock_time, mock_connection: DBConnection
-) -> None:
+    pytestconfig: Any,
+    tmp_path: pathlib.Path,
+    mock_time: int,
+    mock_connection: DBConnection,
+) -> None:  # noqa : No need for type annotations here
     test_resources_dir = pytestconfig.rootpath / "tests/integration/lookml"
     mce_out_file = f"lookml_mces_api_{mock_connection.dialect_name}.json"
     mocked_client = mock.MagicMock()
