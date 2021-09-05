@@ -58,7 +58,7 @@ Note that a `.` is used to denote nested fields in the YAML recipe.
 | ---------------------------------------------- | -------- | ---------- | ----------------------------------------------------------------------- |
 | `base_folder`                                  | ✅       |            | Where the `*.model.lkml` and `*.view.lkml` files are stored.            |
 | `api.base_url`                                 | ❓ if providing api creds |            | Url to your Looker instance: https://company.looker.com:19999 or https://looker.company.com, or similar. | 
-| `api`.client_id                                | ❓ if providing api creds |            | Looker API3 client ID.                                 |
+| `api.client_id`                                | ❓ if providing api creds |            | Looker API3 client ID.                                 |
 | `api.client_secret`                            | ❓ if providing api creds	|            | Looker API3 client secret. | 
 | `connection_to_platform_map.<connection_name>` |          |            | Mappings between connection names in the model files to platform, database and schema values |
 | `connection_to_platform_map.<connection_name>.platform` | ❓ if not using api         |           | Mappings between connection name in the model files to platform name (e.g. snowflake, bigquery, etc) |
