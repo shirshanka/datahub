@@ -16,6 +16,8 @@ This plugin extracts the following:
 - Name, upstream table names, metadata for dimensions, measures, and dimension groups attached as tags
 - If API integration is enabled (recommended), resolves table and view names by calling the Looker API, otherwise supports offline resolution of these names. 
 
+**_NOTE_:** To get complete Looker metadata integration (including Looker dashboards and charts and lineage to the underlying Looker views, you must ALSO use the Looker source. Documentation for that is [here](./looker.md)
+
 ## Quickstart recipe
 
 Check out the following recipe to get started with ingestion! See [below](#config-details) for full configuration options.
