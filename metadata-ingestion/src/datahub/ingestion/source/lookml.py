@@ -885,10 +885,10 @@ class LookMLSource(Source):
                 type=self._get_field_type(field.type),
                 nativeDataType=field.type,
                 description=f"{field.description}"
-                if self.source_config.tag_measures_and_dimensions
+                if self.source_config.tag_measures_and_dimensions is True
                 else f"{field.field_type.value}. {field.description}",
                 globalTags=self._get_tags_from_field_type(field.field_type)
-                if self.source_config.tag_measures_and_dimensions
+                if self.source_config.tag_measures_and_dimensions is True
                 else None,
             )
             fields.append(schema_field)
@@ -911,7 +911,14 @@ class LookMLSource(Source):
 
     def _get_custom_properties(self, looker_view: LookerView) -> DatasetPropertiesClass:
         dataset_props = DatasetPropertiesClass(
-            customProperties={"looker.file_content": looker_view.raw_file_content}
+            customProperties={
+                "looker.file.content": looker_view.raw_file_content[
+                    0:512000
+                ],  # grab a limited slice of characters from the file
+                "looker.file.path": str(
+                    pathlib.Path(looker_view.absolute_file_path).resolve()
+                ).replace(str(self.source_config.base_folder.resolve()), ""),
+            }
         )
         return dataset_props
 

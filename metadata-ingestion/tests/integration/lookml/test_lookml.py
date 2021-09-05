@@ -19,9 +19,51 @@ FROZEN_TIME = "2020-04-14 07:00:00"
 
 @freeze_time(FROZEN_TIME)
 @pytest.mark.skipif(sys.version_info < (3, 7), reason="lkml requires Python 3.7+")
-def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
+def test_lookml_ingest(pytestconfig, tmp_path, mock_time):
+    """Test backwards compatibility with previous form of config with new flags turned off"""
     test_resources_dir = pytestconfig.rootpath / "tests/integration/lookml"
+    mce_out_file = "expected_output.json"
 
+    # Note this config below is known to create "bad" lineage since the config author has not provided enough information
+    # to resolve relative table names (which are not fully qualified)
+    # We keep this check just to validate that ingestion doesn't croak on this config
+    pipeline = Pipeline.create(
+        {
+            "run_id": "lookml-test",
+            "source": {
+                "type": "lookml",
+                "config": {
+                    "base_folder": str(test_resources_dir / "lkml_samples"),
+                    "connection_to_platform_map": {"my_connection": "conn"},
+                    "parse_table_names_from_sql": True,
+                    "tag_measures_and_dimensions": False,
+                },
+            },
+            "sink": {
+                "type": "file",
+                "config": {
+                    "filename": f"{tmp_path}/{mce_out_file}",
+                },
+            },
+        }
+    )
+    pipeline.run()
+    pipeline.pretty_print_summary()
+    pipeline.raise_from_status(raise_warnings=True)
+
+    mce_helpers.check_golden_file(
+        pytestconfig,
+        output_path=tmp_path / mce_out_file,
+        golden_path=test_resources_dir / mce_out_file,
+    )
+
+
+@freeze_time(FROZEN_TIME)
+@pytest.mark.skipif(sys.version_info < (3, 7), reason="lkml requires Python 3.7+")
+def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
+    """New form of config with offline specification of connection defaults"""
+    test_resources_dir = pytestconfig.rootpath / "tests/integration/lookml"
+    mce_out = "lookml_mces_offline.json"
     pipeline = Pipeline.create(
         {
             "run_id": "lookml-test",
@@ -42,7 +84,7 @@ def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
             "sink": {
                 "type": "file",
                 "config": {
-                    "filename": f"{tmp_path}/lookml_mces_offline.json",
+                    "filename": f"{tmp_path}/{mce_out}",
                 },
             },
         }
@@ -53,8 +95,8 @@ def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
 
     mce_helpers.check_golden_file(
         pytestconfig,
-        output_path=tmp_path / "lookml_mces_offline.json",
-        golden_path=test_resources_dir / "expected_output.json",
+        output_path=tmp_path / mce_out,
+        golden_path=test_resources_dir / mce_out,
     )
 
 
