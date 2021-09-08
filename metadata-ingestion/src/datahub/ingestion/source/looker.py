@@ -662,9 +662,9 @@ class LookerDashboardSource(Source):
         return looker_dashboard
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
-        dashboards = client.all_dashboards(fields="id")
+        dashboards = self.client.all_dashboards(fields="id")
         deleted_dashboards = (
-            client.search_dashboards(fields="id", deleted="true")
+            self.client.search_dashboards(fields="id", deleted="true")
             if self.source_config.include_deleted
             else []
         )
