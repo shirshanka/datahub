@@ -17,6 +17,12 @@ from looker_sdk.sdk.api31.methods import Looker31SDK
 from looker_sdk.sdk.api31.models import DBConnection
 from pydantic import root_validator, validator
 
+from datahub.ingestion.source.looker_common import (
+    LookerCommonConfig,
+    LookerUtil,
+    ViewField,
+    ViewFieldType,
+)
 from datahub.utilities.sql_parser import SQLParser
 
 if sys.version_info >= (3, 7):
@@ -36,7 +42,7 @@ from datahub.ingestion.source.sql.sql_types import (
     SNOWFLAKE_TYPES_MAP,
     resolve_postgres_modified_type,
 )
-from datahub.metadata.com.linkedin.pegasus2avro.common import Status
+from datahub.metadata.com.linkedin.pegasus2avro.common import BrowsePaths, Status
 from datahub.metadata.com.linkedin.pegasus2avro.dataset import (
     DatasetLineageTypeClass,
     UpstreamClass,
@@ -138,7 +144,7 @@ class LookerConnectionDefinition(ConfigModel):
         )
 
 
-class LookMLSourceConfig(ConfigModel):
+class LookMLSourceConfig(LookerCommonConfig):
     base_folder: pydantic.DirectoryPath
     connection_to_platform_map: Optional[Dict[str, LookerConnectionDefinition]]
     platform_name: str = "looker"
@@ -147,7 +153,6 @@ class LookMLSourceConfig(ConfigModel):
     env: str = builder.DEFAULT_ENV
     parse_table_names_from_sql: bool = False
     sql_parser: str = "datahub.utilities.sql_parser.DefaultSQLParser"
-    tag_measures_and_dimensions: bool = True
     api: Optional[LookerAPIConfig]
 
     @validator("connection_to_platform_map", pre=True)
@@ -304,6 +309,9 @@ class LookerViewFile:
         resolved_includes = LookerModel.resolve_includes(
             includes, base_folder, absolute_file_path, reporter
         )
+        logger.info(
+            f"resolved_includes for {absolute_file_path} is {resolved_includes}"
+        )
         views = looker_view_file_dict.get("views", [])
 
         return LookerViewFile(
@@ -344,6 +352,7 @@ class LookerViewFileLoader:
             return None
         try:
             with open(path, "r") as file:
+                logger.info(f"Loading file {path}")
                 parsed = lkml.load(file)
                 looker_viewfile = LookerViewFile.from_looker_dict(
                     absolute_file_path=path,
@@ -370,21 +379,6 @@ class LookerViewFileLoader:
             return None
 
         return replace(viewfile, connection=connection)
-
-
-class ViewFieldType(Enum):
-    DIMENSION = "Dimension"
-    DIMENSION_GROUP = "Dimension Group"
-    MEASURE = "Measure"
-
-
-@dataclass
-class ViewField:
-    name: str
-    type: str
-    description: str
-    field_type: ViewFieldType
-    is_primary_key: bool = False
 
 
 @dataclass
@@ -458,13 +452,13 @@ class LookerView:
         # The sql_table_name might be defined in another view and this view is extending that view,
         # so we resolve this field while taking that into account.
         sql_table_name: Optional[str] = LookerView.get_including_extends(
-            view_name,
-            looker_view,
-            connection,
-            looker_viewfile,
-            looker_viewfile_loader,
-            "sql_table_name",
-            reporter,
+            view_name=view_name,
+            looker_view=looker_view,
+            connection=connection,
+            looker_viewfile=looker_viewfile,
+            looker_viewfile_loader=looker_viewfile_loader,
+            field="sql_table_name",
+            reporter=reporter,
         )
 
         # Some sql_table_name fields contain quotes like: optimizely."group", just remove the quotes
@@ -598,106 +592,6 @@ class LookerView:
         return None
 
 
-field_type_mapping = {
-    **POSTGRES_TYPES_MAP,
-    **SNOWFLAKE_TYPES_MAP,
-    "date": DateTypeClass,
-    "date_day_of_month": NumberTypeClass,
-    "date_day_of_week": EnumTypeClass,
-    "date_day_of_week_index": EnumTypeClass,
-    "date_fiscal_month_num": NumberTypeClass,
-    "date_fiscal_quarter": DateTypeClass,
-    "date_fiscal_quarter_of_year": EnumTypeClass,
-    "date_hour": TimeTypeClass,
-    "date_hour_of_day": NumberTypeClass,
-    "date_month": DateTypeClass,
-    "date_month_num": NumberTypeClass,
-    "date_month_name": EnumTypeClass,
-    "date_quarter": DateTypeClass,
-    "date_quarter_of_year": EnumTypeClass,
-    "date_time": TimeTypeClass,
-    "date_time_of_day": TimeTypeClass,
-    "date_microsecond": TimeTypeClass,
-    "date_millisecond": TimeTypeClass,
-    "date_minute": TimeTypeClass,
-    "date_raw": TimeTypeClass,
-    "date_second": TimeTypeClass,
-    "date_week": TimeTypeClass,
-    "date_year": DateTypeClass,
-    "date_day_of_year": NumberTypeClass,
-    "date_week_of_year": NumberTypeClass,
-    "date_fiscal_year": DateTypeClass,
-    "duration_day": StringTypeClass,
-    "duration_hour": StringTypeClass,
-    "duration_minute": StringTypeClass,
-    "duration_month": StringTypeClass,
-    "duration_quarter": StringTypeClass,
-    "duration_second": StringTypeClass,
-    "duration_week": StringTypeClass,
-    "duration_year": StringTypeClass,
-    "distance": NumberTypeClass,
-    "duration": NumberTypeClass,
-    "location": UnionTypeClass,
-    "number": NumberTypeClass,
-    "string": StringTypeClass,
-    "tier": EnumTypeClass,
-    "time": TimeTypeClass,
-    "unquoted": StringTypeClass,
-    "yesno": BooleanTypeClass,
-    "zipcode": EnumTypeClass,
-    "int": NumberTypeClass,
-    "average": NumberTypeClass,
-    "average_distinct": NumberTypeClass,
-    "count": NumberTypeClass,
-    "count_distinct": NumberTypeClass,
-    "list": ArrayTypeClass,
-    "max": NumberTypeClass,
-    "median": NumberTypeClass,
-    "median_distinct": NumberTypeClass,
-    "min": NumberTypeClass,
-    "percent_of_previous": NumberTypeClass,
-    "percent_of_total": NumberTypeClass,
-    "percentile": NumberTypeClass,
-    "percentile_distinct": NumberTypeClass,
-    "running_total": NumberTypeClass,
-    "sum": NumberTypeClass,
-    "sum_distinct": NumberTypeClass,
-}
-
-
-@dataclass
-class LookerExplore:
-    name: str
-    from_: Optional[str]
-    description: Optional[str]
-    joins: Optional[List[str]] = None
-    field_match = re.compile(r"\${([^}]+)}")
-
-    def _has_different_metadata_from_underlying_view(self) -> bool:
-        """
-        We only handle alias explores for now, because not handling them breaks lineage.
-        Join based explores end up showing up in Chart lineage correctly through to the
-        underlying views without needing any special handling.
-        """
-        if self.from_ is not None and self.name != self.from_ and self.joins is None:
-            return True
-        return False
-
-    def _get_fields_from_sql_equality(self, sql_fragment: str) -> List[str]:
-        return self.field_match.findall(sql_fragment)
-
-    def __init__(self, dict: Dict):
-        self.name = dict["name"]
-        self.from_ = dict.get("from")
-        self.description = dict.get("description")
-        self.view_name = dict.get("view_name")
-        for join in dict.get("joins", {}):
-            sql_on = join.get("sql_on", None)
-            if sql_on is not None:
-                fields = self._get_fields_from_sql_equality(sql_on)
-                self.joins = fields
-
-
 class LookMLSource(Source):
     source_config: LookMLSourceConfig
     reporter: LookMLSourceReport
@@ -718,6 +612,7 @@ class LookMLSource(Source):
 
     def _load_model(self, path: str) -> LookerModel:
         with open(path, "r") as file:
+            logger.info(f"Loading file {path}")
             parsed = lkml.load(file)
             looker_model = LookerModel.from_looker_dict(
                 parsed, str(self.source_config.base_folder), path, self.reporter
@@ -837,78 +732,6 @@ class LookMLSource(Source):
 
         return upstream_lineage
 
-    def _get_field_type(self, native_type: str) -> SchemaFieldDataType:
-
-        type_class = field_type_mapping.get(native_type)
-
-        if type_class is None:
-
-            # attempt Postgres modified type
-            type_class = resolve_postgres_modified_type(native_type)
-
-        # if still not found, report a warning
-        if type_class is None:
-            self.reporter.report_warning(
-                native_type,
-                f"The type '{native_type}' is not recognized for field type, setting as NullTypeClass.",
-            )
-            type_class = NullTypeClass
-
-        data_type = SchemaFieldDataType(type=type_class())
-        return data_type
-
-    def _get_tags_from_field_type(
-        self, field_type: ViewFieldType
-    ) -> Optional[GlobalTagsClass]:
-        if field_type in self.type_to_tag_map:
-            return GlobalTagsClass(
-                tags=[
-                    TagAssociationClass(tag=tag_name)
-                    for tag_name in self.type_to_tag_map[field_type]
-                ]
-            )
-        else:
-            self.reporter.report_warning(
-                "lookml",
-                "Failed to map view field type {field_type}. Won't emit tags for it",
-            )
-            return None
-
-    def _get_fields_and_primary_keys(
-        self, looker_view: LookerView
-    ) -> Tuple[List[SchemaField], List[str]]:
-        fields: List[SchemaField] = []
-        primary_keys: List = []
-        for field in looker_view.fields:
-            schema_field = SchemaField(
-                fieldPath=field.name,
-                type=self._get_field_type(field.type),
-                nativeDataType=field.type,
-                description=f"{field.description}"
-                if self.source_config.tag_measures_and_dimensions is True
-                else f"{field.field_type.value}. {field.description}",
-                globalTags=self._get_tags_from_field_type(field.field_type)
-                if self.source_config.tag_measures_and_dimensions is True
-                else None,
-            )
-            fields.append(schema_field)
-            if field.is_primary_key:
-                primary_keys.append(schema_field.fieldPath)
-        return fields, primary_keys
-
-    def _get_schema(self, looker_view: LookerView) -> SchemaMetadataClass:
-        fields, primary_keys = self._get_fields_and_primary_keys(looker_view)
-        schema_metadata = SchemaMetadata(
-            schemaName=looker_view.view_name,
-            platform=f"urn:li:dataPlatform:{self.source_config.platform_name}",
-            version=0,
-            fields=fields,
-            primaryKeys=primary_keys,
-            hash="",
-            platformSchema=OtherSchema(rawSchema="looker-view"),
-        )
-        return schema_metadata
-
     def _get_custom_properties(self, looker_view: LookerView) -> DatasetPropertiesClass:
         dataset_props = DatasetPropertiesClass(
             customProperties={
@@ -937,109 +760,25 @@ class LookMLSource(Source):
             ),
             aspects=[],  # we append to this list later on
         )
+        browse_paths = BrowsePaths(
+            paths=[f"/{self.source_config.env.lower()}/looker/views/{dataset_name}"]
+        )
+        dataset_snapshot.aspects.append(browse_paths)
         dataset_snapshot.aspects.append(Status(removed=False))
         dataset_snapshot.aspects.append(self._get_upstream_lineage(looker_view))
-        dataset_snapshot.aspects.append(self._get_schema(looker_view))
+        dataset_snapshot.aspects.append(
+            LookerUtil._get_schema(
+                self.source_config.platform_name,
+                looker_view.view_name,
+                looker_view.fields,
+                self.reporter,
+            )
+        )
         dataset_snapshot.aspects.append(self._get_custom_properties(looker_view))
 
         mce = MetadataChangeEvent(proposedSnapshot=dataset_snapshot)
 
         return mce
-
-    def _build_mce_for_explore(  # noqa: C901
-        self, explore: LookerExplore, views_with_workunits: Dict[str, MetadataWorkUnit]
-    ) -> Optional[MetadataChangeEvent]:
-        # We only generate MCE-s for explores that contain from clauses and do NOT contain joins
-        # All other explores (passthrough explores and joins) end in correct resolution of lineage, and don't need additional nodes in the graph.
-        if explore.from_ is not None and explore.joins is None:
-            # this is an alias explore (explore name different from view name)
-            dataset_name = explore.name
-
-            # Sanitize the urn creation.
-            dataset_name = dataset_name.replace('"', "").replace("`", "")
-            dataset_snapshot = DatasetSnapshot(
-                urn=builder.make_dataset_urn(
-                    self.source_config.platform_name,
-                    dataset_name,
-                    self.source_config.env,
-                ),
-                aspects=[],  # we append to this list later on
-            )
-            dataset_snapshot.aspects.append(Status(removed=False))
-            if explore.from_ in views_with_workunits:
-                metadata = views_with_workunits[explore.from_].metadata
-                if isinstance(metadata, MetadataChangeEventClass):
-                    mce = cast(MetadataChangeEventClass, metadata)
-                    for x in metadata.proposedSnapshot.aspects:
-                        if isinstance(x, SchemaMetadataClass):
-                            logger.info("Found schema metadata")
-                            dataset_snapshot.aspects.append(x)
-            upstreams = []
-            upstream = UpstreamClass(
-                dataset=builder.make_dataset_urn(
-                    self.source_config.platform_name,
-                    explore.from_,
-                    self.source_config.env,
-                ),
-                type=DatasetLineageTypeClass.VIEW,
-            )
-            upstreams.append(upstream)
-            upstream_lineage = UpstreamLineage(upstreams=upstreams)
-            dataset_snapshot.aspects.append(upstream_lineage)
-            dataset_props = DatasetPropertiesClass(
-                customProperties={
-                    "looker.type": "explore",
-                    "looker.explore.from": str(explore.from_),
-                },
-                description=explore.description,
-            )
-            dataset_snapshot.aspects.append(dataset_props)
-
-            mce = MetadataChangeEvent(proposedSnapshot=dataset_snapshot)
-            return mce
-        else:
-            self.reporter.report_explores_dropped(explore.name)
-            return None
-
-    type_to_tag_map: Dict[ViewFieldType, List[str]] = {
-        ViewFieldType.DIMENSION: ["urn:li:tag:datahub.dimension"],
-        ViewFieldType.DIMENSION_GROUP: [
-            "urn:li:tag:datahub.dimension",
-            "urn:li:tag:datahub.temporal",
-        ],
-        ViewFieldType.MEASURE: ["urn:li:tag:datahub.measure"],
-    }
-
-    tag_definitions: Dict[str, TagPropertiesClass] = {
-        "urn:li:tag:datahub.dimension": TagPropertiesClass(
-            name="Dimension",
-            description="A tag that is applied to all dimension fields.",
-        ),
-        "urn:li:tag:datahub.temporal": TagPropertiesClass(
-            name="Temporal",
-            description="A tag that is applied to all time-based (temporal) fields such as timestamps or durations.",
-        ),
-        "urn:li:tag:datahub.measure": TagPropertiesClass(
-            name="Measure",
-            description="A tag that is applied to all measures (metrics). Measures are typically the columns that you aggregate on",
-        ),
-    }
-
-    def _get_tag_mce_for_urn(self, tag_urn: str) -> MetadataChangeEvent:
-        assert tag_urn in self.tag_definitions
-        ownership = OwnershipClass(
-            owners=[
-                OwnerClass(
-                    owner="urn:li:corpuser:datahub",
-                    type=OwnershipTypeClass.DATAOWNER,
-                )
-            ]
-        )
-        return MetadataChangeEvent(
-            proposedSnapshot=TagSnapshotClass(
-                urn=tag_urn, aspects=[ownership, self.tag_definitions[tag_urn]]
-            )
-        )
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:  # noqa: C901
         viewfile_loader = LookerViewFileLoader(
@@ -1056,12 +795,9 @@ class LookMLSource(Source):
         # include all the files we want.
         model_files = sorted(self.source_config.base_folder.glob("**/*.model.lkml"))
 
-        # We collect a list of explores that need to be emitted, after emitting all the underlying views
-        explores_to_emit: List[LookerExplore] = []
-
         for file_path in model_files:
             self.reporter.report_models_scanned()
-            model_name = file_path.stem
+            model_name = file_path.stem[0 : -len(".model")]
 
             if not self.source_config.model_pattern.allowed(model_name):
                 self.reporter.report_models_dropped(model_name)
@@ -1127,31 +863,12 @@ class LookMLSource(Source):
                                 self.reporter.report_views_dropped(
                                     maybe_looker_view.view_name
                                 )
-            for explore in model.explores:
-                maybe_looker_explore: LookerExplore = LookerExplore(explore)
-                self.reporter.report_explores_scanned()
-                if maybe_looker_explore._has_different_metadata_from_underlying_view():
-                    # we need to emit metadata for this explore
-                    explores_to_emit.append(maybe_looker_explore)
-                else:
-                    self.reporter.report_explores_dropped(maybe_looker_explore.name)
-
-        for candidate_explore in explores_to_emit:
-            explore_mce = self._build_mce_for_explore(
-                explore=candidate_explore, views_with_workunits=views_with_workunits
-            )
-            if explore_mce is not None:
-                workunit = MetadataWorkUnit(
-                    id=f"lookml-explore-{maybe_looker_explore.name}", mce=explore_mce
-                )
-                self.reporter.report_workunit(workunit)
-                yield workunit
 
         if self.source_config.tag_measures_and_dimensions:
             # Emit tag MCEs for measures and dimensions:
-            for tag_urn in self.tag_definitions:
+            for tag_mce in LookerUtil.get_tag_mces():
                 workunit = MetadataWorkUnit(
-                    id=f"tag-{tag_urn}", mce=self._get_tag_mce_for_urn(tag_urn)
+                    id=f"tag-{tag_mce.proposedSnapshot.urn}", mce=tag_mce
                 )
                 self.reporter.report_workunit(workunit)
                 yield workunit

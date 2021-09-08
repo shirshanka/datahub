@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, Iterable, List, MutableMapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 import looker_sdk
 from looker_sdk.error import SDKError
@@ -13,7 +13,6 @@ from looker_sdk.sdk.api31.models import (
     Dashboard,
     DashboardElement,
     FolderBase,
-    LookWithQuery,
     Query,
     User,
 )
@@ -24,6 +23,11 @@ from datahub.configuration.common import AllowDenyPattern, ConfigurationError
 from datahub.ingestion.api.common import PipelineContext
 from datahub.ingestion.api.source import Source, SourceReport
 from datahub.ingestion.api.workunit import MetadataWorkUnit
+from datahub.ingestion.source.looker_common import (
+    LookerCommonConfig,
+    LookerExplore,
+    LookerUtil,
+)
 from datahub.metadata.com.linkedin.pegasus2avro.common import ChangeAuditStamps, Status
 from datahub.metadata.com.linkedin.pegasus2avro.metadata.snapshot import (
     ChartSnapshot,
@@ -35,6 +39,7 @@ from datahub.metadata.schema_classes import (
     ChartInfoClass,
     ChartTypeClass,
     DashboardInfoClass,
+    MetadataChangeEventClass,
     OwnerClass,
     OwnershipClass,
     OwnershipTypeClass,
@@ -72,7 +77,7 @@ class LookerAPI:
         return self.client
 
 
-class LookerDashboardSourceConfig(LookerAPIConfig):
+class LookerDashboardSourceConfig(LookerAPIConfig, LookerCommonConfig):
     platform_name: str = "looker"
     actor: Optional[str]
     dashboard_pattern: AllowDenyPattern = AllowDenyPattern.allow_all()
@@ -108,10 +113,11 @@ class LookerDashboardElement:
     id: str
     title: str
     query_slug: str
-    looker_views: List[str]
+    upstream_explores: List[LookerExplore]
     look_id: Optional[str]
     type: Optional[str] = None
     description: Optional[str] = None
+    upstream_fields: Optional[List[str]] = None
 
     def url(self, base_url: str) -> str:
         # A dashboard element can use a look or just a raw query against an explore
@@ -125,9 +131,60 @@ class LookerDashboardElement:
         return f"dashboard_elements.{self.id}"
 
     def get_view_urns(self, platform_name: str, env: str) -> List[str]:
-        return [
-            builder.make_dataset_urn(platform_name, v, env) for v in self.looker_views
-        ]
+        return [v.make_explore_urn(env, platform_name) for v in self.upstream_explores]
+
+
+@dataclass
+class LookerUser:
+    id: int
+    email: Optional[str]
+    display_name: Optional[str]
+    first_name: Optional[str]
+    last_name: Optional[str]
+
+    @classmethod
+    def _from_user(cls, raw_user: User) -> "LookerUser":
+        assert raw_user.id is not None
+        return LookerUser(
+            raw_user.id,
+            raw_user.email,
+            raw_user.display_name,
+            raw_user.first_name,
+            raw_user.last_name,
+        )
+
+    def _get_urn(self, strip_user_ids_from_email: bool) -> Optional[str]:
+        if self.email is not None:
+            if strip_user_ids_from_email:
+                return builder.make_user_urn(self.email.split("@")[0])
+            else:
+                return builder.make_user_urn(self.email)
+        return None
+
+
+class LookerUserRegistry:
+    user_map: Dict[int, LookerUser]
+    client: Looker31SDK
+    fields: str = ",".join(["id", "email", "display_name", "first_name", "last_name"])
+
+    def __init__(self, client: Looker31SDK):
+        self.client = client
+        self.user_map = {}
+
+    def get_by_id(self, id: int) -> Optional[LookerUser]:
+        logger.info("Will get user {}".format(id))
+        if id in self.user_map:
+            return self.user_map[id]
+        else:
+            try:
+                raw_user: User = self.client.user(id, fields=self.fields)
+                looker_user = LookerUser._from_user(raw_user)
+                self.user_map[id] = looker_user
+                return looker_user
+            except SDKError as e:
+                logger.warn("Could not find user with id {}".format(id))
+                logger.warn("Failure was {}".format(e))
+                return None
 
 
 @dataclass
@@ -140,7 +197,7 @@ class LookerDashboard:
     folder_path: Optional[str] = None
     is_deleted: bool = False
     is_hidden: bool = False
-    owner: Optional[str] = None
+    owner: Optional[LookerUser] = None
     strip_user_ids_from_email: Optional[bool] = True
 
     def url(self, base_url):
@@ -153,11 +210,16 @@ class LookerDashboard:
 class LookerDashboardSource(Source):
     source_config: LookerDashboardSourceConfig
     reporter: LookerDashboardSourceReport
+    client: Looker31SDK
+    user_registry: LookerUserRegistry
+    explore_set: set[Tuple[str, str]] = set()
 
     def __init__(self, config: LookerDashboardSourceConfig, ctx: PipelineContext):
         super().__init__(ctx)
         self.source_config = config
         self.reporter = LookerDashboardSourceReport()
+        self.client = LookerAPI(self.source_config).get_client()
+        self.user_registry = LookerUserRegistry(self.client)
 
     @staticmethod
     def _extract_view_from_field(field: str) -> str:
@@ -167,11 +229,27 @@ class LookerDashboardSource(Source):
         view_name = field.split(".")[0]
         return view_name
 
-    def _get_views_from_query(self, query: Optional[Query]) -> List[str]:
+    def _get_views_from_fields(self, fields: List[str]) -> List[str]:
+        field_set = set(fields)
+        views = set()
+        for field_name in field_set:
+            try:
+                view_name = self._extract_view_from_field(field_name)
+                views.add(view_name)
+            except AssertionError:
+                self.reporter.report_warning(
+                    key=f"chart-field-{field_name}",
+                    reason="The field was not prefixed by a view name. This can happen when the field references another dynamic field.",
+                )
+                continue
+
+        return list(views)
+
+    def _get_fields_from_query(self, query: Optional[Query]) -> List[str]:
         if query is None:
             return []
 
-        all_views = set()
+        all_fields = set()
 
         # query.dynamic_fields can contain:
         # - looker table calculations: https://docs.looker.com/exploring-data/using-table-calculations
@@ -210,15 +288,7 @@ class LookerDashboardSource(Source):
             if field_name is None:
                 continue
 
-            try:
-                view_name = self._extract_view_from_field(field_name)
-            except AssertionError:
-                self.reporter.report_warning(
-                    key=f"chart-field-{field_name}",
-                    reason="The field was not prefixed by a view name. This can happen when the field references another dynamic field.",
-                )
-                continue
-            all_views.add(view_name)
+            all_fields.add(field_name)
 
         # A query uses fields for filtering and those fields are defined in views, find the views those fields use
         filters: MutableMapping[str, Any] = (
@@ -233,31 +303,37 @@ class LookerDashboardSource(Source):
             )
             if field_name is None:
                 continue
-            try:
-                view_name = self._extract_view_from_field(field_name)
-            except AssertionError:
-                self.reporter.report_warning(
-                    f"chart-field-{field_name}",
-                    "The field was not prefixed by a view name. This can happen when the field references another dynamic field.",
-                )
-                continue
-            all_views.add(view_name)
+            all_fields.add(field_name)
 
-        return list(all_views)
+        return list(all_fields)
 
-    def _get_views_from_look(self, look: LookWithQuery) -> List[str]:
-        return self._get_views_from_query(look.query)
+    # def _get_views_from_look(self, look: LookWithQuery) -> List[str]:
+    #    return self._get_views_from_query(look.query)
 
     def _get_looker_dashboard_element(
-        self,
-        element: DashboardElement,
+        self, element: DashboardElement
     ) -> Optional[LookerDashboardElement]:
         # Dashboard elements can use raw queries against explores
+        # import pdb
+
+        # breakpoint()
+
         if element.id is None:
             raise ValueError("Element ID can't be None")
 
         if element.query is not None:
-            views = self._get_views_from_query(element.query)
+            fields = self._get_fields_from_query(element.query)
+            explores = self._get_views_from_fields(fields)
+
+            if element.query.view is not None:
+                # more reliable to get the explore from the view directly
+                explores = [element.query.view]
+
+            logger.info(
+                "Element {}: Explores added: {}".format(element.title, explores)
+            )
+            for exp in explores:
+                self.explore_set.add((element.query.model, exp))
             return LookerDashboardElement(
                 id=element.id,
                 title=element.title if element.title is not None else "",
@@ -265,24 +341,106 @@ class LookerDashboardSource(Source):
                 description=element.subtitle_text,
                 look_id=None,
                 query_slug=element.query.slug if element.query.slug is not None else "",
-                looker_views=views,
+                upstream_explores=[
+                    LookerExplore(
+                        model_name=element.query.model, name=exp, shell_explore=True
+                    )
+                    for exp in explores
+                ],
+                upstream_fields=fields,
             )
 
         # Dashboard elements can *alternatively* link to an existing look
         if element.look is not None:
-            views = self._get_views_from_look(element.look)
-            if element.look.query and element.look.query.slug:
-                slug = element.look.query.slug
-            else:
-                slug = ""
+            element.look.model
+            if element.look.query is not None:
+                fields = self._get_fields_from_query(element.look.query)
+                explores = self._get_views_from_fields(fields)
+                if element.look.query.view is not None:
+                    explores = [element.look.query.view]
+                logger.info(
+                    "Element {}: Explores added: {}".format(element.title, explores)
+                )
+                for exp in explores:
+                    self.explore_set.add((exp, element.look.query.model))
+
+                if element.look.query and element.look.query.slug:
+                    slug = element.look.query.slug
+                else:
+                    slug = ""
+                return LookerDashboardElement(
+                    id=element.id,
+                    title=element.title if element.title is not None else "",
+                    type=element.type,
+                    description=element.subtitle_text,
+                    look_id=element.look_id,
+                    query_slug=slug,
+                    upstream_explores=[
+                        LookerExplore(
+                            model_name=element.look.query.model,
+                            name=exp,
+                            shell_explore=True,
+                        )
+                        for exp in explores
+                    ],
+                    upstream_fields=fields,
+                )
+
+        # Dashboard elements can also *alternatively* point to a linked look
+        if element.result_maker is not None:
+            views: List[str] = []
+            model: str = ""
+            if element.result_maker.query is not None:
+                model = element.result_maker.query.model
+                fields = self._get_fields_from_query(element.result_maker.query)
+                # fields in result_maker query have underlying view names, don't use them views = self._get_views_from_fields(fields)
+                logger.info(
+                    "Element {}: Explores added: {}".format(element.title, views)
+                )
+
+                for exp in views:
+                    self.explore_set.add((element.result_maker.query.model, exp))
+
+            # In addition to the query, filters can point to fields as well
+            assert element.result_maker.filterables is not None
+            for filterable in element.result_maker.filterables:
+                if filterable.view is not None and filterable.model is not None:
+                    model = filterable.model
+                    views.append(filterable.view)
+                    self.explore_set.add((filterable.model, filterable.view))
+                    logger.info(
+                        "Element {}: Explores added: {}".format(
+                            element.title, filterable.view
+                        )
+                    )
+                listen = filterable.listen
+                if listen is not None:
+                    for listener in listen:
+                        if listener.field is not None:
+                            fields.append(listener.field)
+                            # TODO: Why not add to explores here?
+
+            explores = list(set(views))  # dedup the list of views
+
             return LookerDashboardElement(
                 id=element.id,
                 title=element.title if element.title is not None else "",
                 type=element.type,
                 description=element.subtitle_text,
                 look_id=element.look_id,
-                query_slug=slug,
-                looker_views=views,
+                query_slug=element.result_maker.query.slug
+                if element.result_maker.query is not None
+                and element.result_maker.query.slug is not None
+                else "",
+                upstream_explores=[
+                    LookerExplore(
+                        model_name=model,
+                        name=exp,
+                        shell_explore=True,
+                    )
+                    for exp in explores
+                ],
+                upstream_fields=fields,
             )
 
         return None
@@ -354,7 +512,29 @@ class LookerDashboardSource(Source):
         )
         chart_snapshot.aspects.append(chart_info)
 
+        ownership = self.get_ownership(dashboard)
+        if ownership is not None:
+            chart_snapshot.aspects.append(ownership)
+
         return MetadataChangeEvent(proposedSnapshot=chart_snapshot)
+
+    def _make_explore_mces(self) -> List[MetadataChangeEvent]:
+        explore_mces: List[MetadataChangeEventClass] = []
+        for (model, explore) in self.explore_set:
+            logger.info("Will process model: {}, explore: {}".format(model, explore))
+            looker_explore = LookerExplore.from_api(
+                model, explore, self.client, self.reporter
+            )
+            if looker_explore is not None:
+                explore_mce = looker_explore._to_mce(
+                    self.source_config.env,
+                    self.source_config.platform_name,
+                    self.reporter,
+                    {},
+                )
+                if explore_mce is not None:
+                    explore_mces.append(explore_mce)
+        return explore_mces
 
     def _make_dashboard_and_chart_mces(
         self, looker_dashboard: LookerDashboard
@@ -362,6 +542,7 @@ class LookerDashboardSource(Source):
         chart_mces = [
             self._make_chart_mce(element, looker_dashboard)
             for element in looker_dashboard.dashboard_elements
+            if element.type == "vis"
         ]
 
         dashboard_urn = builder.make_dashboard_urn(
@@ -387,14 +568,8 @@ class LookerDashboardSource(Source):
             )
             dashboard_snapshot.aspects.append(browse_path)
 
-        if looker_dashboard.owner is not None:
-            ownership: OwnershipClass = OwnershipClass(
-                owners=[
-                    OwnerClass(
-                        owner=looker_dashboard.owner, type=OwnershipTypeClass.DATAOWNER
-                    )
-                ]
-            )
+        ownership = self.get_ownership(looker_dashboard)
+        if ownership is not None:
             dashboard_snapshot.aspects.append(ownership)
 
         dashboard_snapshot.aspects.append(Status(removed=looker_dashboard.is_deleted))
@@ -403,11 +578,24 @@ class LookerDashboardSource(Source):
 
         return chart_mces + [dashboard_mce]
 
-    def _generate_user_urn_from_email(self, email: str) -> str:
-        if self.source_config.strip_user_ids_from_email:
-            return builder.make_user_urn(email.split("@")[0])
-        else:
-            return builder.make_user_urn(email)
+    def get_ownership(
+        self, looker_dashboard: LookerDashboard
+    ) -> Optional[OwnershipClass]:
+        if looker_dashboard.owner is not None:
+            owner_urn = looker_dashboard.owner._get_urn(
+                self.source_config.strip_user_ids_from_email
+            )
+            if owner_urn is not None:
+                ownership: OwnershipClass = OwnershipClass(
+                    owners=[
+                        OwnerClass(
+                            owner=owner_urn,
+                            type=OwnershipTypeClass.DATAOWNER,
+                        )
+                    ]
+                )
+                return ownership
+        return None
 
     def _get_folder_path(self, folder: FolderBase, client: Looker31SDK) -> str:
         assert folder.id is not None
@@ -440,23 +628,24 @@ class LookerDashboardSource(Source):
         if dashboard.id is None or dashboard.title is None:
             raise ValueError("Both dashboard ID and title are None")
 
-        dashboard_owner = None
+        import pdb
+
+        # breakpoint()
+        dashboard_owner = (
+            self.user_registry.get_by_id(dashboard.user_id)
+            if self.source_config.extract_owners and dashboard.user_id is not None
+            else None
+        )
+        logger.info(
+            "user-id:{} dashboard owner is {}".format(
+                dashboard.user_id, dashboard_owner
+            )
+        )
         if dashboard.folder is None:
             logger.debug(f"{dashboard.id} has no folder")
         dashboard_folder_path = None
         if dashboard.folder is not None:
             dashboard_folder_path = self._get_folder_path(dashboard.folder, client)
-            if self.source_config.extract_owners:
-                user_id = dashboard.folder.creator_id
-                if user_id is not None:
-                    user: User = client.user(user_id=user_id)
-                    email = user.email
-                    if email is not None:
-                        dashboard_owner = self._generate_user_urn_from_email(email)
-                else:
-                    logger.debug(
-                        f"Dashboard: {dashboard.id} with folder: {dashboard.folder.name} has no creator"
-                    )
 
         looker_dashboard = LookerDashboard(
             id=dashboard.id,
@@ -473,7 +662,6 @@ class LookerDashboardSource(Source):
         return looker_dashboard
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
-        client = LookerAPI(self.source_config).get_client()
         dashboards = client.all_dashboards(fields="id")
         deleted_dashboards = (
             client.search_dashboards(fields="id", deleted="true")
@@ -483,7 +671,6 @@ class LookerDashboardSource(Source):
         dashboard_ids = [
             dashboard_base.id
             for dashboard_base in dashboards + deleted_dashboards
-            if dashboard_base.id is not None
         ]
 
         for dashboard_id in dashboard_ids:
@@ -500,8 +687,9 @@ class LookerDashboardSource(Source):
                     "deleted",
                     "description",
                     "folder",
+                    "user_id",
                 ]
-                dashboard_object = client.dashboard(
+                dashboard_object = self.client.dashboard(
                     dashboard_id=dashboard_id, fields=",".join(fields)
                 )
             except SDKError:
@@ -512,11 +700,29 @@ class LookerDashboardSource(Source):
                 )
                 continue
 
-            looker_dashboard = self._get_looker_dashboard(dashboard_object, client)
+            looker_dashboard = self._get_looker_dashboard(dashboard_object, self.client)
             mces = self._make_dashboard_and_chart_mces(looker_dashboard)
             for mce in mces:
                 workunit = MetadataWorkUnit(
                     id=f"looker-{mce.proposedSnapshot.urn}", mce=mce
+                )
+                self.reporter.report_workunit(workunit)
+                yield workunit
+
+        explore_mces = self._make_explore_mces()
+        for mce in explore_mces:
+            workunit = MetadataWorkUnit(
+                id=f"looker-{mce.proposedSnapshot.urn}", mce=mce
+            )
+            self.reporter.report_workunit(workunit)
+            yield workunit
+
+        if self.source_config.tag_measures_and_dimensions:
+            # Emit tag MCEs for measures and dimensions:
+            for tag_mce in LookerUtil.get_tag_mces():
+                workunit = MetadataWorkUnit(
+                    id=f"tag-{tag_mce.proposedSnapshot.urn}",
+                    mce=tag_mce,
                 )
                 self.reporter.report_workunit(workunit)
                 yield workunit
