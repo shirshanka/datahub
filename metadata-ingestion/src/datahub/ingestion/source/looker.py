@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
@@ -201,6 +202,10 @@ class LookerDashboard:
     strip_user_ids_from_email: Optional[bool] = True
 
     def url(self, base_url):
+        # If the base_url contains a port number (like https://company.looker.com:19999) remove the port number
+        m = re.match("^(.*):([0-9]+)$", base_url)
+        if m is not None:
+            base_url = m.group(0)
         return base_url + "/dashboards/" + self.id
 
     def get_urn_dashboard_id(self):
