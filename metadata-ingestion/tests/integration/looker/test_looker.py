@@ -3,7 +3,14 @@ from datetime import datetime
 from unittest import mock
 
 from freezegun import freeze_time
-from looker_sdk.sdk.api31.models import Dashboard, DashboardElement, Query
+from looker_sdk.sdk.api31.models import (
+    Dashboard,
+    DashboardElement,
+    LookmlModelExplore,
+    LookmlModelExploreField,
+    LookmlModelExploreFieldset,
+    Query,
+)
 
 from datahub.ingestion.run.pipeline import Pipeline
 from tests.test_helpers import mce_helpers
@@ -35,6 +42,7 @@ def test_looker_ingest(pytestconfig, tmp_path, mock_time):
                 )
             ],
         )
+        setup_mock_explore(mocked_client)
 
         test_resources_dir = pytestconfig.rootpath / "tests/integration/looker"
 
@@ -66,6 +74,22 @@ def test_looker_ingest(pytestconfig, tmp_path, mock_time):
             output_path=tmp_path / "looker_mces.json",
             golden_path=f"{test_resources_dir}/{mce_out_file}",
         )
+
+
+def setup_mock_explore(mocked_client):
+    mocked_client.lookml_model_explore.return_value = LookmlModelExplore(
+        id="my_view",
+        label="My Explore View",
+        description="lorem ipsum",
+        view_name="underlying_view",
+        fields=LookmlModelExploreFieldset(
+            dimensions=[
+                LookmlModelExploreField(
+                    name="dim1", type="string", dimension_group=None
+                )
+            ]
+        ),
+    )
 
 
 @freeze_time(FROZEN_TIME)
@@ -102,6 +126,7 @@ def test_looker_ingest_allow_pattern(pytestconfig, tmp_path, mock_time):
                 ),
             ],
         )
+        setup_mock_explore(mocked_client)
 
         test_resources_dir = pytestconfig.rootpath / "tests/integration/looker"
 

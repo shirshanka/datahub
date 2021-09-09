@@ -353,6 +353,7 @@ class LookerViewFileLoader:
 class LookerView:
     absolute_file_path: str
     connection: LookerConnectionDefinition
+    model_name: str
     view_name: str
     sql_table_names: List[str]
     fields: List[ViewField]
@@ -406,6 +407,7 @@ class LookerView:
     @classmethod
     def from_looker_dict(
         cls,
+        model_name: str,
         looker_view: dict,
         connection: LookerConnectionDefinition,
         looker_viewfile: LookerViewFile,
@@ -415,7 +417,7 @@ class LookerView:
         sql_parser_path: str = "datahub.utilities.sql_parser.DefaultSQLParser",
     ) -> Optional["LookerView"]:
         view_name = looker_view["name"]
-        logger.debug(f"Handling view {view_name}")
+        logger.debug(f"Handling view {view_name} in model {model_name}")
 
         # The sql_table_name might be defined in another view and this view is extending that view,
         # so we resolve this field while taking that into account.
@@ -463,6 +465,7 @@ class LookerView:
             return LookerView(
                 absolute_file_path=looker_viewfile.absolute_file_path,
                 connection=connection,
+                model_name=model_name,
                 view_name=view_name,
                 sql_table_names=sql_table_names,
                 fields=fields,
@@ -482,6 +485,7 @@ class LookerView:
         output_looker_view = LookerView(
             absolute_file_path=looker_viewfile.absolute_file_path,
             connection=connection,
+            model_name=model_name,
             view_name=view_name,
             sql_table_names=sql_table_names,
             fields=fields,
@@ -729,7 +733,9 @@ class LookMLSource(Source):
             aspects=[],  # we append to this list later on
         )
         browse_paths = BrowsePaths(
-            paths=[f"/{self.source_config.env.lower()}/looker/views/{dataset_name}"]
+            paths=[
+                f"/{self.source_config.env.lower()}/looker/{looker_view.model_name}/views/{dataset_name}"
+            ]
         )
         dataset_snapshot.aspects.append(browse_paths)
         dataset_snapshot.aspects.append(Status(removed=False))
@@ -799,6 +805,7 @@ class LookMLSource(Source):
                         self.reporter.report_views_scanned()
                         try:
                             maybe_looker_view = LookerView.from_looker_dict(
+                                model_name,
                                 raw_view,
                                 connectionDefinition,
                                 looker_viewfile,
