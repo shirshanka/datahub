@@ -349,7 +349,6 @@ class LookerDashboardSource(Source):
 
         # Dashboard elements can *alternatively* link to an existing look
         if element.look is not None:
-            element.look.model
             if element.look.query is not None:
                 fields = self._get_fields_from_query(element.look.query)
                 explores = self._get_views_from_fields(fields)
@@ -506,6 +505,11 @@ class LookerDashboardSource(Source):
             inputs=dashboard_element.get_view_urns(
                 self.source_config.platform_name, self.source_config.env
             ),
+            customProperties={
+                "upstream_fields": ",".join(set(dashboard_element.upstream_fields))
+                if dashboard_element.upstream_fields
+                else ""
+            },
         )
         chart_snapshot.aspects.append(chart_info)
 
