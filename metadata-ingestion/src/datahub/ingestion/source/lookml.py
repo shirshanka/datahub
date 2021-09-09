@@ -8,8 +8,7 @@ import sys
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from dataclasses import replace
-from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type, cast
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
 import pydantic
 from looker_sdk.error import SDKError
@@ -23,6 +22,7 @@ from datahub.ingestion.source.looker_common import (
     ViewField,
     ViewFieldType,
 )
+from datahub.metadata.schema_classes import DatasetPropertiesClass
 from datahub.utilities.sql_parser import SQLParser
 
 if sys.version_info >= (3, 7):
@@ -37,11 +37,6 @@ from datahub.ingestion.api.common import PipelineContext
 from datahub.ingestion.api.source import Source, SourceReport
 from datahub.ingestion.api.workunit import MetadataWorkUnit
 from datahub.ingestion.source.looker import LookerAPI, LookerAPIConfig
-from datahub.ingestion.source.sql.sql_types import (
-    POSTGRES_TYPES_MAP,
-    SNOWFLAKE_TYPES_MAP,
-    resolve_postgres_modified_type,
-)
 from datahub.metadata.com.linkedin.pegasus2avro.common import BrowsePaths, Status
 from datahub.metadata.com.linkedin.pegasus2avro.dataset import (
     DatasetLineageTypeClass,
@@ -50,33 +45,6 @@ from datahub.metadata.com.linkedin.pegasus2avro.dataset import (
 )
 from datahub.metadata.com.linkedin.pegasus2avro.metadata.snapshot import DatasetSnapshot
 from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
-from datahub.metadata.com.linkedin.pegasus2avro.schema import (
-    ArrayTypeClass,
-    BooleanTypeClass,
-    DateTypeClass,
-    NullTypeClass,
-    NumberTypeClass,
-    OtherSchema,
-    SchemaField,
-    SchemaFieldDataType,
-    SchemaMetadata,
-    StringTypeClass,
-    TimeTypeClass,
-    UnionTypeClass,
-)
-from datahub.metadata.schema_classes import (
-    DatasetPropertiesClass,
-    EnumTypeClass,
-    GlobalTagsClass,
-    MetadataChangeEventClass,
-    OwnerClass,
-    OwnershipClass,
-    OwnershipTypeClass,
-    SchemaMetadataClass,
-    TagAssociationClass,
-    TagPropertiesClass,
-    TagSnapshotClass,
-)
 
 assert sys.version_info[1] >= 7  # needed for mypy
 
@@ -794,10 +762,11 @@ class LookMLSource(Source):
         # The ** means "this directory and all subdirectories", and hence should
         # include all the files we want.
         model_files = sorted(self.source_config.base_folder.glob("**/*.model.lkml"))
+        model_suffix_len = len(".model")
 
         for file_path in model_files:
             self.reporter.report_models_scanned()
-            model_name = file_path.stem[0 : -len(".model")]
+            model_name = file_path.stem[0:-model_suffix_len]
 
             if not self.source_config.model_pattern.allowed(model_name):
                 self.reporter.report_models_dropped(model_name)

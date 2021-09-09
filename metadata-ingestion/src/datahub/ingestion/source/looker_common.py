@@ -2,17 +2,14 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from looker_sdk.error import SDKError
 from looker_sdk.sdk.api31.methods import Looker31SDK
 
 import datahub.emitter.mce_builder as builder
 from datahub.configuration import ConfigModel
-from datahub.configuration.common import AllowDenyPattern, ConfigurationError
-from datahub.ingestion.api.common import PipelineContext
-from datahub.ingestion.api.report import Report
-from datahub.ingestion.api.source import Source, SourceReport
+from datahub.ingestion.api.source import SourceReport
 from datahub.ingestion.api.workunit import MetadataWorkUnit
 from datahub.ingestion.source.sql.sql_types import (
     POSTGRES_TYPES_MAP,
@@ -45,19 +42,15 @@ from datahub.metadata.schema_classes import (
     DatasetPropertiesClass,
     EnumTypeClass,
     GlobalTagsClass,
-    MetadataChangeEventClass,
-    OtherSchemaClass,
     OwnerClass,
     OwnershipClass,
     OwnershipTypeClass,
-    SchemaFieldClass,
     SchemaMetadataClass,
     StatusClass,
     TagAssociationClass,
     TagPropertiesClass,
     TagSnapshotClass,
 )
-from datahub.utilities.sql_parser import SQLParser
 
 # from pydantic import root_validator, validator
 

@@ -310,13 +310,10 @@ class LookerDashboardSource(Source):
     # def _get_views_from_look(self, look: LookWithQuery) -> List[str]:
     #    return self._get_views_from_query(look.query)
 
-    def _get_looker_dashboard_element(
+    def _get_looker_dashboard_element(  # noqa: C901
         self, element: DashboardElement
     ) -> Optional[LookerDashboardElement]:
         # Dashboard elements can use raw queries against explores
-        # import pdb
-
-        # breakpoint()
 
         if element.id is None:
             raise ValueError("Element ID can't be None")
@@ -628,9 +625,6 @@ class LookerDashboardSource(Source):
         if dashboard.id is None or dashboard.title is None:
             raise ValueError("Both dashboard ID and title are None")
 
-        import pdb
-
-        # breakpoint()
         dashboard_owner = (
             self.user_registry.get_by_id(dashboard.user_id)
             if self.source_config.extract_owners and dashboard.user_id is not None
@@ -669,8 +663,7 @@ class LookerDashboardSource(Source):
             else []
         )
         dashboard_ids = [
-            dashboard_base.id
-            for dashboard_base in dashboards + deleted_dashboards
+            dashboard_base.id for dashboard_base in dashboards + deleted_dashboards
         ]
 
         for dashboard_id in dashboard_ids:
