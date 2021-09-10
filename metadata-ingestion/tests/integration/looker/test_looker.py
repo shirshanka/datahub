@@ -77,11 +77,14 @@ def test_looker_ingest(pytestconfig, tmp_path, mock_time):
 
 
 def setup_mock_explore(mocked_client):
+    mock_model = mock.MagicMock(project_name="lkml_samples")
+    mocked_client.lookml_model.return_value = mock_model
     mocked_client.lookml_model_explore.return_value = LookmlModelExplore(
         id="my_view",
         label="My Explore View",
         description="lorem ipsum",
         view_name="underlying_view",
+        project_name="lkml_samples",
         fields=LookmlModelExploreFieldset(
             dimensions=[
                 LookmlModelExploreField(
@@ -95,6 +98,7 @@ def setup_mock_explore(mocked_client):
 @freeze_time(FROZEN_TIME)
 def test_looker_ingest_allow_pattern(pytestconfig, tmp_path, mock_time):
     mocked_client = mock.MagicMock()
+
     with mock.patch("looker_sdk.init31") as mock_sdk:
         mock_sdk.return_value = mocked_client
         mocked_client.all_dashboards.return_value = [Dashboard(id="1")]
