@@ -122,6 +122,8 @@ class LookMLSourceConfig(LookerCommonConfig):
     parse_table_names_from_sql: bool = False
     sql_parser: str = "datahub.utilities.sql_parser.DefaultSQLParser"
     api: Optional[LookerAPIConfig]
+    project_name: Optional[str]
+    use_project_name_in_view_name: Optional[bool] = True
 
     @validator("connection_to_platform_map", pre=True)
     def convert_string_to_connection_def(cls, conn_map):
@@ -154,6 +156,15 @@ class LookMLSourceConfig(LookerCommonConfig):
         ):
             raise ConfigurationError(
                 "Neither api not connection_to_platform_map config was found. LookML source requires either api credentials for Looker or a map of connection names to platform identifiers to work correctly"
+            )
+        return values
+
+    @root_validator()
+    def check_either_project_name_or_api_provided(cls, values):
+        """Validate that we must either have a project name or an api credential to fetch project names"""
+        if not values.get("project_name") and not values.get("api"):
+            raise ConfigurationError(
+                "Neither project_name not an API credential was found. LookML source requires either api credentials for Looker or a project_name to accurately name views and models."
             )
         return values
 
@@ -353,6 +364,7 @@ class LookerViewFileLoader:
 class LookerView:
     absolute_file_path: str
     connection: LookerConnectionDefinition
+    project_name: str
     model_name: str
     view_name: str
     sql_table_names: List[str]
@@ -407,6 +419,7 @@ class LookerView:
     @classmethod
     def from_looker_dict(
         cls,
+        project_name: str,
         model_name: str,
         looker_view: dict,
         connection: LookerConnectionDefinition,
@@ -418,7 +431,6 @@ class LookerView:
     ) -> Optional["LookerView"]:
         view_name = looker_view["name"]
         logger.debug(f"Handling view {view_name} in model {model_name}")
-
         # The sql_table_name might be defined in another view and this view is extending that view,
         # so we resolve this field while taking that into account.
         sql_table_name: Optional[str] = LookerView.get_including_extends(
@@ -465,6 +477,7 @@ class LookerView:
             return LookerView(
                 absolute_file_path=looker_viewfile.absolute_file_path,
                 connection=connection,
+                project_name=project_name,
                 model_name=model_name,
                 view_name=view_name,
                 sql_table_names=sql_table_names,
@@ -485,6 +498,7 @@ class LookerView:
         output_looker_view = LookerView(
             absolute_file_path=looker_viewfile.absolute_file_path,
             connection=connection,
+            project_name=project_name,
             model_name=model_name,
             view_name=view_name,
             sql_table_names=sql_table_names,
@@ -705,16 +719,15 @@ class LookMLSource(Source):
         return upstream_lineage
 
     def _get_custom_properties(self, looker_view: LookerView) -> DatasetPropertiesClass:
-        dataset_props = DatasetPropertiesClass(
-            customProperties={
-                "looker.file.content": looker_view.raw_file_content[
-                    0:512000
-                ],  # grab a limited slice of characters from the file
-                "looker.file.path": str(
-                    pathlib.Path(looker_view.absolute_file_path).resolve()
-                ).replace(str(self.source_config.base_folder.resolve()), ""),
-            }
-        )
+        custom_properties = {
+            "looker.file.content": looker_view.raw_file_content[
+                0:512000
+            ],  # grab a limited slice of characters from the file
+            "looker.file.path": str(
+                pathlib.Path(looker_view.absolute_file_path).resolve()
+            ).replace(str(self.source_config.base_folder.resolve()), ""),
+        }
+        dataset_props = DatasetPropertiesClass(customProperties=custom_properties)
         return dataset_props
 
     def _build_dataset_mce(self, looker_view: LookerView) -> MetadataChangeEvent:
@@ -722,7 +735,14 @@ class LookMLSource(Source):
         Creates MetadataChangeEvent for the dataset, creating upstream lineage links
         """
         logger.debug(f"looker_view = {looker_view.view_name}")
-        dataset_name = looker_view.view_name
+        dataset_name = (
+            f"{looker_view.project_name}.{looker_view.view_name}"
+            if self.source_config.use_project_name_in_view_name
+            else looker_view.view_name
+        )
+        logger.info(
+            f"{self.source_config.use_project_name_in_view_name}: project name = {looker_view.project_name}, view_name={looker_view.view_name}"
+        )
 
         # Sanitize the urn creation.
         dataset_name = dataset_name.replace('"', "").replace("`", "")
@@ -734,7 +754,7 @@ class LookMLSource(Source):
         )
         browse_paths = BrowsePaths(
             paths=[
-                f"/{self.source_config.env.lower()}/looker/{looker_view.model_name}/views/{dataset_name}"
+                f"/{self.source_config.env.lower()}/looker/{looker_view.project_name}/views/{looker_view.view_name}"
             ]
         )
         dataset_snapshot.aspects.append(browse_paths)
@@ -753,6 +773,24 @@ class LookMLSource(Source):
         mce = MetadataChangeEvent(proposedSnapshot=dataset_snapshot)
 
         return mce
+
+    def get_project_name(self, model_name: str) -> str:
+        if self.source_config.project_name is not None:
+            return self.source_config.project_name
+
+        assert (
+            self.looker_client is not None
+        ), "Failed to find a configured Looker API client"
+        try:
+            model = self.looker_client.lookml_model(model_name, "project_name")
+            assert (
+                model.project_name is not None
+            ), f"Failed to find a project name for model {model_name}"
+            return model.project_name
+        except SDKError:
+            raise ValueError(
+                f"Could not locate a project name for model {model_name}. Consider configuring a static project name in your config file"
+            )
 
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:  # noqa: C901
         viewfile_loader = LookerViewFileLoader(
@@ -791,6 +829,8 @@ class LookMLSource(Source):
                 model.connection
             )
 
+            project_name = self.get_project_name(model_name)
+
             for include in model.resolved_includes:
                 if include in processed_view_files:
                     logger.debug(f"view '{include}' already processed, skipping it")
@@ -805,6 +845,7 @@ class LookMLSource(Source):
                         self.reporter.report_views_scanned()
                         try:
                             maybe_looker_view = LookerView.from_looker_dict(
+                                project_name,
                                 model_name,
                                 raw_view,
                                 connectionDefinition,

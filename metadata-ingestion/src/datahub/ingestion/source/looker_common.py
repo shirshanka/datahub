@@ -206,15 +206,15 @@ class LookerUtil:
     }
 
     tag_definitions: Dict[str, TagPropertiesClass] = {
-        "urn:li:tag:datahub.dimension": TagPropertiesClass(
+        "urn:li:tag:Dimension": TagPropertiesClass(
             name="Dimension",
             description="A tag that is applied to all dimension fields.",
         ),
-        "urn:li:tag:datahub.temporal": TagPropertiesClass(
+        "urn:li:tag:Temporal": TagPropertiesClass(
             name="Temporal",
             description="A tag that is applied to all time-based (temporal) fields such as timestamps or durations.",
         ),
-        "urn:li:tag:datahub.measure": TagPropertiesClass(
+        "urn:li:tag:Measure": TagPropertiesClass(
             name="Measure",
             description="A tag that is applied to all measures (metrics). Measures are typically the columns that you aggregate on",
         ),
@@ -295,6 +295,7 @@ class LookerUtil:
 class LookerExplore:
     name: str
     model_name: str
+    project_name: Optional[str] = None
     label: Optional[str] = None
     description: Optional[str] = None
     upstream_views: Optional[
@@ -337,26 +338,6 @@ class LookerExplore:
             upstream_views=list(view_names),
             joins=joins,
         )
-
-    @staticmethod
-    def _get_lineage_from_dict(dict: Dict):
-        pass
-        # if explore.joins is None or explore.joins == []:
-        # This is a passthrough explore or an alias explore (explore name different from view name)
-        #    view_name = explore.name if explore.from_ is None else explore.from_
-        # We just copy all the underlying view metadata over
-        #    if view_name in views_with_workunits:
-        #        metadata = views_with_workunits[view_name].metadata
-        #        if isinstance(metadata, MetadataChangeEventClass):
-        #            mce = cast(MetadataChangeEventClass, metadata)
-        #            for x in metadata.proposedSnapshot.aspects:
-        #                if isinstance(x, SchemaMetadataClass):
-        #                    dataset_snapshot.aspects.append(x)
-        #    else:
-        #        self.reporter.report_warning(
-        #            f"looker-explore-{dataset_name}",
-        #            f"Could not locate view called {view_name}. Continuing with partial information.",
-        #        )
 
     @classmethod
     def from_api(  # noqa: C901
@@ -436,6 +417,7 @@ class LookerExplore:
             return cls(
                 name=explore_name,
                 model_name=model,
+                project_name=explore.project_name,
                 label=explore.label,
                 description=explore.description,
                 fields=view_fields,
@@ -474,7 +456,9 @@ class LookerExplore:
             aspects=[],  # we append to this list later on
         )
         browse_paths = BrowsePathsClass(
-            paths=[f"/{env.lower()}/looker/{self.model_name}/explores/{self.name}"]
+            paths=[
+                f"/{env.lower()}/looker/{self.project_name}/explores/{self.model_name}.{self.name}"
+            ]
         )
         dataset_snapshot.aspects.append(browse_paths)
         dataset_snapshot.aspects.append(StatusClass(removed=False))
@@ -493,7 +477,7 @@ class LookerExplore:
                 UpstreamClass(
                     dataset=builder.make_dataset_urn(
                         platform,
-                        view_name,
+                        f"{self.project_name}.{view_name}",  # view names are prefixed with project name
                         env,
                     ),
                     type=DatasetLineageTypeClass.VIEW,

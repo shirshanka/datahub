@@ -87,6 +87,7 @@ class LookerDashboardSourceConfig(LookerAPIConfig, LookerCommonConfig):
     env: str = builder.DEFAULT_ENV
     extract_owners: bool = True
     strip_user_ids_from_email: bool = True
+    skip_personal_folders: bool = False
 
 
 @dataclass
@@ -614,6 +615,12 @@ class LookerDashboardSource(Source):
     def _get_looker_dashboard(
         self, dashboard: Dashboard, client: Looker31SDK
     ) -> LookerDashboard:
+
+        if dashboard.folder is None:
+            logger.debug(f"{dashboard.id} has no folder")
+        dashboard_folder_path = None
+        if dashboard.folder is not None:
+            dashboard_folder_path = self._get_folder_path(dashboard.folder, client)
         dashboard_elements: List[LookerDashboardElement] = []
         elements = (
             dashboard.dashboard_elements
@@ -644,11 +651,6 @@ class LookerDashboardSource(Source):
                 dashboard.user_id, dashboard_owner
             )
         )
-        if dashboard.folder is None:
-            logger.debug(f"{dashboard.id} has no folder")
-        dashboard_folder_path = None
-        if dashboard.folder is not None:
-            dashboard_folder_path = self._get_folder_path(dashboard.folder, client)
 
         looker_dashboard = LookerDashboard(
             id=dashboard.id,
@@ -701,6 +703,17 @@ class LookerDashboardSource(Source):
                     f"Error occurred while loading dashboard {dashboard_id}. Skipping.",
                 )
                 continue
+
+            if self.source_config.skip_personal_folders:
+                if dashboard_object.folder is not None and (
+                    dashboard_object.folder.is_personal
+                    or dashboard_object.folder.is_personal_descendant
+                ):
+                    self.reporter.report_warning(
+                        dashboard_id, "Dropped due to being a personal folder"
+                    )
+                    self.reporter.report_dashboards_dropped(dashboard_id)
+                    continue
 
             looker_dashboard = self._get_looker_dashboard(dashboard_object, self.client)
             mces = self._make_dashboard_and_chart_mces(looker_dashboard)
