@@ -82,6 +82,7 @@ class LookerUtil:
         **POSTGRES_TYPES_MAP,
         **SNOWFLAKE_TYPES_MAP,
         "date": DateTypeClass,
+        "date_date": DateTypeClass,
         "date_day_of_month": NumberTypeClass,
         "date_day_of_week": EnumTypeClass,
         "date_day_of_week_index": EnumTypeClass,
