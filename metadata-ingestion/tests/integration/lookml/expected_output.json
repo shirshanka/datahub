@@ -3,12 +3,12 @@
     "auditHeader": null,
     "proposedSnapshot": {
         "com.linkedin.pegasus2avro.metadata.snapshot.DatasetSnapshot": {
-            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,my_view,PROD)",
+            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,lkml_samples.my_view,PROD)",
             "aspects": [
                 {
                     "com.linkedin.pegasus2avro.common.BrowsePaths": {
                         "paths": [
-                            "/prod/looker/data/views/my_view"
+                            "/prod/looker/lkml_samples/views/my_view"
                         ]
                     }
                 },
@@ -201,12 +201,12 @@
     "auditHeader": null,
     "proposedSnapshot": {
         "com.linkedin.pegasus2avro.metadata.snapshot.DatasetSnapshot": {
-            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,looker_events,PROD)",
+            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,lkml_samples.looker_events,PROD)",
             "aspects": [
                 {
                     "com.linkedin.pegasus2avro.common.BrowsePaths": {
                         "paths": [
-                            "/prod/looker/second/views/looker_events"
+                            "/prod/looker/lkml_samples/views/looker_events"
                         ]
                     }
                 },
@@ -285,12 +285,12 @@
     "auditHeader": null,
     "proposedSnapshot": {
         "com.linkedin.pegasus2avro.metadata.snapshot.DatasetSnapshot": {
-            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,extending_looker_events,PROD)",
+            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,lkml_samples.extending_looker_events,PROD)",
             "aspects": [
                 {
                     "com.linkedin.pegasus2avro.common.BrowsePaths": {
                         "paths": [
-                            "/prod/looker/second/views/extending_looker_events"
+                            "/prod/looker/lkml_samples/views/extending_looker_events"
                         ]
                     }
                 },
@@ -392,12 +392,12 @@
     "auditHeader": null,
     "proposedSnapshot": {
         "com.linkedin.pegasus2avro.metadata.snapshot.DatasetSnapshot": {
-            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,autodetect_sql_name_based_on_view_name,PROD)",
+            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,lkml_samples.autodetect_sql_name_based_on_view_name,PROD)",
             "aspects": [
                 {
                     "com.linkedin.pegasus2avro.common.BrowsePaths": {
                         "paths": [
-                            "/prod/looker/second/views/autodetect_sql_name_based_on_view_name"
+                            "/prod/looker/lkml_samples/views/autodetect_sql_name_based_on_view_name"
                         ]
                     }
                 },
@@ -476,12 +476,12 @@
     "auditHeader": null,
     "proposedSnapshot": {
         "com.linkedin.pegasus2avro.metadata.snapshot.DatasetSnapshot": {
-            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,test_include_external_view,PROD)",
+            "urn": "urn:li:dataset:(urn:li:dataPlatform:looker,lkml_samples.test_include_external_view,PROD)",
             "aspects": [
                 {
                     "com.linkedin.pegasus2avro.common.BrowsePaths": {
                         "paths": [
-                            "/prod/looker/second/views/test_include_external_view"
+                            "/prod/looker/lkml_samples/views/test_include_external_view"
                         ]
                     }
                 },

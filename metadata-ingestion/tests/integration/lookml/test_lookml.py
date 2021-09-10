@@ -37,6 +37,7 @@ def test_lookml_ingest(pytestconfig, tmp_path, mock_time):
                     "connection_to_platform_map": {"my_connection": "conn"},
                     "parse_table_names_from_sql": True,
                     "tag_measures_and_dimensions": False,
+                    "project_name": "lkml_samples",
                 },
             },
             "sink": {
@@ -79,6 +80,7 @@ def test_lookml_ingest_offline(pytestconfig, tmp_path, mock_time):
                         }
                     },
                     "parse_table_names_from_sql": True,
+                    "project_name": "lkml_samples",
                 },
             },
             "sink": {
@@ -133,10 +135,12 @@ def ingestion_test(
     test_resources_dir = pytestconfig.rootpath / "tests/integration/lookml"
     mce_out_file = f"lookml_mces_api_{mock_connection.dialect_name}.json"
     mocked_client = mock.MagicMock()
+    mock_model = mock.MagicMock(project_name="lkml_samples")
     with mock.patch("looker_sdk.init31") as mock_sdk:
         mock_sdk.return_value = mocked_client
         # mock_connection = mock.MagicMock()
         mocked_client.connection.return_value = mock_connection
+        mocked_client.lookml_model.return_value = mock_model
 
         pipeline = Pipeline.create(
             {
