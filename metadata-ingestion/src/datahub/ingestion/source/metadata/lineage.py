@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from pydantic import ValidationError, validator
+from pydantic import validator
 
 import datahub.metadata.schema_classes as models
 from datahub.configuration.common import (
