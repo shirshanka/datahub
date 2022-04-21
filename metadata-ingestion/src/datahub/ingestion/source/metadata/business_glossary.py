@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from pydantic import validator
+from pydantic import root_validator, validator
 
 import datahub.metadata.schema_classes as models
 from datahub.configuration.common import ConfigModel
@@ -26,6 +26,7 @@ class Owners(ConfigModel):
 
 
 class GlossaryTermConfig(ConfigModel):
+    id: Optional[str]
     name: str
     description: str
     term_source: Optional[str]
@@ -36,14 +37,26 @@ class GlossaryTermConfig(ConfigModel):
     contains: Optional[List[str]]
     custom_properties: Optional[Dict[str, str]]
 
+    @root_validator(pre=True)
+    def fill_id_if_omitted(cls, values):
+        if 'id' not in values and 'name' in values:
+            values['id'] = values['name'].replace(" ","_")
+        return values
+
 
 class GlossaryNodeConfig(ConfigModel):
+    id: Optional[str]
     name: str
     description: str
     owners: Optional[Owners]
     terms: Optional[List[GlossaryTermConfig]]
     nodes: Optional[List["GlossaryNodeConfig"]]
 
+    @root_validator(pre=True)
+    def fill_id_if_omitted(cls, values):
+        if 'id' not in values and 'name' in values:
+            values['id'] = values['name'].replace(" ","_")
+        return values
 
 GlossaryNodeConfig.update_forward_refs()
 
@@ -112,7 +125,7 @@ def get_mces(
         for node in glossary.nodes:
             events += get_mces_from_node(
                 node,
-                path + [node.name],
+                path + [node.id],
                 parentNode=None,
                 parentOwners=root_owners,
                 defaults=glossary,
@@ -122,7 +135,7 @@ def get_mces(
         for term in glossary.terms:
             events += get_mces_from_term(
                 term,
-                path + [term.name],
+                path + [term.id],
                 parentNode=None,
                 parentOwnership=root_owners,
                 defaults=glossary,
@@ -144,6 +157,7 @@ def get_mces_from_node(
 ) -> List[models.MetadataChangeEventClass]:
     node_urn = make_glossary_node_urn(path)
     node_info = models.GlossaryNodeInfoClass(
+        name = glossaryNode.name,
         definition=glossaryNode.description,
         parentNode=parentNode,
     )
@@ -198,6 +212,7 @@ def get_mces_from_term(
         ]
     ] = []
     term_info = models.GlossaryTermInfoClass(
+        name=glossaryTerm.name,
         definition=glossaryTerm.description,
         termSource=glossaryTerm.term_source  # type: ignore
         if glossaryTerm.term_source is not None
