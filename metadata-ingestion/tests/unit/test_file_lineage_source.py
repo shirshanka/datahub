@@ -5,11 +5,15 @@ import pytest
 import yaml
 
 from datahub.configuration.common import ConfigurationError
+from datahub.ingestion.api.common import PipelineContext
 from datahub.ingestion.source.metadata.lineage import LineageConfig, LineageFileSource
 from datahub.metadata.schema_classes import UpstreamClass
 
 logger = logging.getLogger(__name__)
 
+@pytest.fixture
+def pipeline_context():
+    mock_pipeline_ctx = PipelineContext(run_id="test", datahub_api=None)
 
 @pytest.fixture
 def basic_mcp():
@@ -41,6 +45,7 @@ def basic_mcp():
         """
     config = yaml.safe_load(sample_lineage)
     lineage_config: LineageConfig = LineageConfig.parse_obj(config)
+    lfs = LineageFileSource(ctx=pipeline_context(), config=LineageFileSourceConfig())
     mcp = list(
         LineageFileSource.get_lineage_metadata_change_event_proposal(
             entities=lineage_config.lineage, preserve_upstream=False
@@ -87,6 +92,7 @@ def unsupported_entity_type_mcp():
         """
     config = yaml.safe_load(sample_lineage)
     lineage_config: LineageConfig = LineageConfig.parse_obj(config)
+    lfs: LineageFileSource = LineageFileSource(PipelineContext())
     mcp = list(
         LineageFileSource.get_lineage_metadata_change_event_proposal(
             entities=lineage_config.lineage, preserve_upstream=False

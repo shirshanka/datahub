@@ -2,10 +2,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from pydantic import validator
+from pydantic import ValidationError, validator
 
 import datahub.metadata.schema_classes as models
-from datahub.cli.cli_utils import get_aspects_for_entity
 from datahub.configuration.common import (
     ConfigModel,
     ConfigurationError,
@@ -70,15 +69,22 @@ class LineageConfig(VersionedConfig):
 
 @dataclass
 class LineageFileSource(Source):
-    config: LineageFileSourceConfig
-    report: SourceReport = field(default_factory=SourceReport)
+
+    def __init__(self, config: LineageFileSourceConfig, ctx: PipelineContext):
+        super().__init__(ctx)
+        self.config: LineageFileSourceConfig = config
+        self.report: SourceReport = SourceReport()
+        if self.config.preserve_upstream and not ctx.graph:
+            raise ConfigurationError(
+                "preserve_upstream is set to True, but you have not configured a datahub api to connect to. Either use a REST sink or configure the `datahub_api` endpoint in your recipe. e.g. datahub_api: { 'server': 'http://localhost:8080' }"
+            )
 
     @classmethod
     def create(
         cls, config_dict: Dict[str, Any], ctx: PipelineContext
     ) -> "LineageFileSource":
         config = LineageFileSourceConfig.parse_obj(config_dict)
-        return cls(ctx, config)
+        return cls(config, ctx)
 
     @staticmethod
     def load_lineage_config(file_name: str) -> LineageConfig:
@@ -86,9 +92,8 @@ class LineageFileSource(Source):
         lineage_config = LineageConfig.parse_obj(config)
         return lineage_config
 
-    @staticmethod
     def get_lineage_metadata_change_event_proposal(
-        entities: List[EntityNodeConfig], preserve_upstream: bool
+        self, entities: List[EntityNodeConfig], preserve_upstream: bool
     ) -> Iterable[MetadataChangeProposalWrapper]:
         """
         Builds a list of events to be emitted to datahub by going through each entity and its upstream nodes
@@ -124,11 +129,12 @@ class LineageFileSource(Source):
                 if entity_urn:
                     # extract the old lineage and save it for the new mcp
                     if preserve_upstream:
-                        old_upstream_lineage = get_aspects_for_entity(
+                        assert self.ctx.graph
+                        old_upstream_lineage = self.ctx.graph.get_aspect_v2(
                             entity_urn=entity_urn,
-                            aspects=["upstreamLineage"],
-                            typed=True,
-                        ).get("upstreamLineage")
+                            aspect_type=models.UpstreamLineageClass,
+                            aspect="upstreamLineage",
+                        )
                         if old_upstream_lineage:
                             # Can't seem to get mypy to be happy about
                             # `Argument 1 to "list" has incompatible type "Optional[Any]";
