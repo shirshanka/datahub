@@ -1092,14 +1092,6 @@ class DBTSource(StatefulIngestionSourceBase):
         def string_map(input_map: Dict[str, Any]) -> Dict[str, str]:
             return {k: str(v) for k, v in input_map.items()}
 
-        if self.config.test_results_path:
-            yield from DBTTest.load_test_results(
-                self.config,
-                self.load_file_as_json(self.config.test_results_path),
-                test_nodes,
-                manifest_nodes,
-            )
-
         for node in test_nodes:
             node_datahub_urn = mce_builder.make_assertion_urn(
                 mce_builder.datahub_guid(
@@ -1269,6 +1261,15 @@ class DBTSource(StatefulIngestionSourceBase):
                 )
                 self.report.report_workunit(soft_delete_wu)
                 yield soft_delete_wu
+
+        if self.config.test_results_path:
+            breakpoint()
+            yield from DBTTest.load_test_results(
+                self.config,
+                self.load_file_as_json(self.config.test_results_path),
+                test_nodes,
+                manifest_nodes,
+            )
 
     # create workunits from dbt nodes
     def get_workunits(self) -> Iterable[MetadataWorkUnit]:
