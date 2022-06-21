@@ -1103,6 +1103,7 @@ class DBTSource(StatefulIngestionSourceBase):
                 )
             )
             self.save_checkpoint(node_datahub_urn)
+            custom_props["unique_id"] = node.dbt_name
 
             dpi_mcp = MetadataChangeProposalWrapper(
                 entityType="assertion",
@@ -1263,7 +1264,6 @@ class DBTSource(StatefulIngestionSourceBase):
                 yield soft_delete_wu
 
         if self.config.test_results_path:
-            breakpoint()
             yield from DBTTest.load_test_results(
                 self.config,
                 self.load_file_as_json(self.config.test_results_path),
