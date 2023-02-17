@@ -300,7 +300,7 @@ def post_rollback_endpoint(
     unsafe_entity_count = summary.get("unsafeEntitiesCount", 0)
     unsafe_entities = summary.get("unsafeEntities", [])
     rolled_back_aspects = list(
-        filter(lambda row: row["runId"] == payload_obj["runId"], rows)
+        filter(lambda row: row.get("runId") == payload_obj.get("runId"), rows)
     )
 
     if len(rows) == 0:
@@ -424,7 +424,8 @@ def get_urns_by_filter(
         "filter": {"or": [{"and": filter_criteria}]},
     }
     payload = json.dumps(search_body)
-    log.debug(payload)
+    log.debug(f"url={url}")
+    log.debug(f"payload={payload}")
     response: Response = session.post(url, payload)
     if response.status_code == 200:
         assert response._content
