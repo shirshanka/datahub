@@ -1,0 +1,21 @@
+namespace com.mycompany.privacy
+
+@Aspect = {
+    "name": "privacyInfo",
+    "autoRender": true,
+    "renderSpec": {
+    "displayType": "properties", // or properties
+    "displayName": "Privacy"
+  }
+}
+record PrivacyInfo {
+  policy_id: optional string
+
+  @Searchable = {
+    "fieldType": "KEYWORD",
+    "addToFilters": true,
+  }
+  privacy_compliant: optional string
+
+  privacy_last_enforcement_time: optional long
+}
